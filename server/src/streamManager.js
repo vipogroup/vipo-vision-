@@ -398,6 +398,10 @@ export const streamManager = {
     return stream ? toPublic(stream) : null;
   },
 
+  getRawStream(cameraId) {
+    return activeStreams.get(cameraId) || null;
+  },
+
   stopAll() {
     for (const [id] of activeStreams) {
       this.stop(id);

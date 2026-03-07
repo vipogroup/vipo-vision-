@@ -611,6 +611,46 @@ function buildTestSuites(cameras) {
       ],
     },
     {
+      id: 'camera-quality',
+      name: 'Camera Hardware & Quality',
+      icon: Eye,
+      color: 'teal',
+      tests: [
+        ...cameras.filter(c => c.brand === 'CloseLi').map((cam) => ({
+          id: `hw-${cam.id}`,
+          name: `${cam.name} — Hardware`,
+          description: `Detect brand, model, resolution for ${cam.id}`,
+          run: async () => {
+            const res = await fetch(`${gw}/api/cameras/${cam.id}/probe`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            const hw = data.hardware;
+            if (!hw) throw new Error('No hardware data returned');
+            if (hw.brand === 'Unknown') throw new Error('Brand not detected');
+            return `${hw.brand} ${hw.model} | ${hw.type} | ${hw.ip}:${hw.port} | Config: ${hw.configuredResolution} @ ${hw.configuredFps}fps`;
+          },
+        })),
+        ...cameras.filter(c => c.brand === 'CloseLi').map((cam) => ({
+          id: `quality-${cam.id}`,
+          name: `${cam.name} — Stream Quality`,
+          description: `FFprobe actual resolution, codec, FPS for ${cam.id}`,
+          run: async () => {
+            const res = await fetch(`${gw}/api/cameras/${cam.id}/probe`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (!data.quality) {
+              if (data.stream === null) return `No active stream — start stream first`;
+              throw new Error('FFprobe returned no video data');
+            }
+            const q = data.quality;
+            const s = data.stream;
+            const uptimeMin = s?.uptime ? `${Math.floor(s.uptime / 60)}m${s.uptime % 60}s` : 'N/A';
+            return `${q.width}x${q.height} | ${q.codec} (${q.profile}) | ${q.fps} fps | ${q.bitrate} | uptime: ${uptimeMin}`;
+          },
+        })),
+      ],
+    },
+    {
       id: 'performance',
       name: 'Performance',
       icon: Zap,

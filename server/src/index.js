@@ -169,6 +169,76 @@ app.get('/api/streams/status/:cameraId', (req, res) => {
   res.json(stream || { state: 'stopped' });
 });
 
+// ─── Stream Probe (FFprobe) ──────────────────────────────────────
+
+app.get('/api/cameras/:id/probe', async (req, res) => {
+  try {
+    const camera = cameraStore.getById(req.params.id);
+    if (!camera) {
+      return res.status(404).json({ success: false, message: 'Camera not found' });
+    }
+
+    const stream = streamManager.getRawStream(req.params.id);
+    const hlsPath = stream?.playlistPath;
+
+    // Camera hardware info (from store)
+    const hardware = {
+      brand: camera.brand || 'Unknown',
+      model: camera.model || 'Unknown',
+      ip: camera.ip,
+      port: camera.port,
+      type: camera.type,
+      configuredResolution: camera.resolution || 'Unknown',
+      configuredFps: camera.fps || 0,
+      configuredCodec: camera.codec || 'Unknown',
+    };
+
+    // If no active stream or no playlist, return hardware only
+    if (!hlsPath || !stream || stream.state !== 'running') {
+      return res.json({
+        success: true,
+        hardware,
+        stream: null,
+        message: 'No active stream to probe',
+      });
+    }
+
+    // Run FFprobe on the HLS playlist
+    const { execSync } = await import('child_process');
+    const cmd = `ffprobe -v quiet -print_format json -show_streams -show_format "${hlsPath}"`;
+    const output = execSync(cmd, { timeout: 10000 }).toString();
+    const probe = JSON.parse(output);
+
+    const videoStream = (probe.streams || []).find(s => s.codec_type === 'video');
+    const quality = videoStream ? {
+      width: videoStream.width,
+      height: videoStream.height,
+      codec: videoStream.codec_name,
+      profile: videoStream.profile,
+      fps: videoStream.r_frame_rate,
+      bitrate: videoStream.bit_rate ? `${Math.round(videoStream.bit_rate / 1000)}kbps` : (probe.format?.bit_rate ? `${Math.round(probe.format.bit_rate / 1000)}kbps` : 'N/A'),
+      pixelFormat: videoStream.pix_fmt,
+      level: videoStream.level,
+    } : null;
+
+    res.json({
+      success: true,
+      hardware,
+      stream: {
+        state: stream.state,
+        mode: stream.mode || 'unknown',
+        sourceType: stream.sourceType || 'unknown',
+        startedAt: stream.startedAt,
+        uptime: Math.round((Date.now() - new Date(stream.startedAt).getTime()) / 1000),
+      },
+      quality,
+    });
+  } catch (err) {
+    log('error', `Probe failed for ${req.params.id}: ${err.message}`);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ─── Recording to Local Disk ─────────────────────────────────────
 
 app.post('/api/recordings/start', async (req, res) => {
