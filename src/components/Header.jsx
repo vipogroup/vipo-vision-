@@ -24,25 +24,25 @@ export default function Header({ title, subtitle }) {
 
   return (
     <>
-    <header className="h-16 bg-slate-900/40 backdrop-blur-sm border-b border-slate-800/40 flex items-center justify-between px-6 flex-shrink-0">
-      <div>
-        <h2 className="text-lg font-semibold text-white">{title}</h2>
-        {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+    <header className="h-16 bg-slate-900/40 backdrop-blur-sm border-b border-slate-800/40 flex items-center justify-between px-3 md:px-6 flex-shrink-0">
+      <div className="pl-10 md:pl-0">
+        <h2 className="text-base md:text-lg font-semibold text-white truncate">{title}</h2>
+        {subtitle && <p className="text-[10px] md:text-xs text-slate-500 mt-0.5">{subtitle}</p>}
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="hidden md:flex items-center gap-2 text-xs text-slate-500 bg-slate-800/40 px-3 py-1.5 rounded-lg">
+      <div className="flex items-center gap-1.5 md:gap-3">
+        <div className="hidden lg:flex items-center gap-2 text-xs text-slate-500 bg-slate-800/40 px-3 py-1.5 rounded-lg">
           <Clock className="w-3.5 h-3.5" />
           <span className="font-mono">
             {time.toLocaleTimeString('en-US', { hour12: false })}
           </span>
         </div>
 
-        <button className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors">
+        <button className="hidden sm:block p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors">
           <Search className="w-4.5 h-4.5" />
         </button>
 
-        <div className="flex items-center gap-0.5 bg-slate-800/40 rounded-lg px-1 py-0.5">
+        <div className="hidden sm:flex items-center gap-0.5 bg-slate-800/40 rounded-lg px-1 py-0.5">
           <button
             onClick={zoomOut}
             disabled={zoom <= 0.5}
@@ -70,13 +70,13 @@ export default function Header({ title, subtitle }) {
 
         <button
           onClick={() => setShowDiagnostics(true)}
-          className="p-2 rounded-lg text-amber-400/70 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
+          className="hidden sm:block p-2 rounded-lg text-amber-400/70 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
           title="Diagnostics & Testing"
         >
           <Zap className="w-4.5 h-4.5" />
         </button>
 
-        <button className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors">
+        <button className="hidden md:block p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors">
           <Maximize2 className="w-4.5 h-4.5" />
         </button>
 
@@ -90,7 +90,7 @@ export default function Header({ title, subtitle }) {
           </button>
 
           {showNotifications && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-slate-800 border border-slate-700/60 rounded-xl shadow-2xl shadow-black/40 z-50 animate-fade-in overflow-hidden">
+            <div className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 bg-slate-800 border border-slate-700/60 rounded-xl shadow-2xl shadow-black/40 z-50 animate-fade-in overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-700/60">
                 <h3 className="text-sm font-semibold text-white">Notifications</h3>
               </div>
@@ -114,9 +114,9 @@ export default function Header({ title, subtitle }) {
           )}
         </div>
 
-        <div className="w-px h-8 bg-slate-800 mx-1" />
+        <div className="hidden sm:block w-px h-8 bg-slate-800 mx-1" />
 
-        <div className="flex items-center gap-2.5">
+        <div className="hidden sm:flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold text-white">
             {user?.name?.charAt(0) || 'U'}
           </div>

@@ -33,11 +33,19 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    0
+    env(safe-area-inset-left);
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 @keyframes fadeIn {

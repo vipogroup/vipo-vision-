@@ -28,26 +28,26 @@ export default function DashboardPage() {
     <>
       <Header title={t('dashboard.title')} subtitle={`${cameras.length} ${t('nav.cameras').toLowerCase()}`} />
       <div className="flex-1 flex flex-col p-2 gap-2 min-h-0 overflow-hidden">
-        <div className="flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between flex-shrink-0 flex-wrap gap-2">
+          <div className="flex items-center gap-2 md:gap-3">
             {gridOptions.map((opt) => (
               <button
                 key={opt.size}
                 onClick={() => setGridSize(opt.size)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                className={`flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-md text-xs font-medium transition-all min-h-[36px] ${
                   gridSize === opt.size
                     ? 'bg-cyan-500/15 text-cyan-400 shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
               >
                 <opt.icon className="w-3.5 h-3.5" />
-                {opt.label}
+                <span className="hidden sm:inline">{opt.label}</span>
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-4 text-xs text-slate-400">
+          <div className="flex items-center gap-3 md:gap-4 text-[10px] md:text-xs text-slate-400">
             <span className="text-emerald-400">{onlineCount} online</span>
-            <span className="text-blue-400">{recordingCount} recording</span>
+            <span className="text-blue-400">{recordingCount} rec</span>
           </div>
         </div>
 
