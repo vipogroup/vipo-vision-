@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Settings,
   HardDrive,
@@ -14,13 +14,18 @@ import {
   Shield,
   Database,
   Trash2,
+  Gauge,
+  RotateCw,
+  AlertTriangle,
 } from 'lucide-react';
 import Header from '../components/Header';
 import { users } from '../data/users';
 import { useLanguage } from '../hooks/useLanguage';
+import { GATEWAY_BASE } from '../config';
 
 const tabs = [
   { id: 'general', label: 'General', icon: Settings },
+  { id: 'health', label: 'System Health', icon: Gauge },
   { id: 'storage', label: 'Storage', icon: HardDrive },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'users', label: 'Users', icon: Users },
@@ -60,6 +65,9 @@ function SettingRow({ label, description, children }) {
 export default function SettingsPage() {
   const { t, lang, changeLang } = useLanguage();
   const [activeTab, setActiveTab] = useState('general');
+  const [metrics, setMetrics] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState(null);
   const [settings, setSettings] = useState({
     systemName: 'VIPO Vision',
     language: lang,
@@ -78,6 +86,42 @@ export default function SettingsPage() {
   const updateSetting = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
+
+  const formatBytes = (bytes) => {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    const v = n / (1024 ** i);
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+  };
+
+  const refreshMetrics = async () => {
+    setMetricsLoading(true);
+    setMetricsError(null);
+    try {
+      const res = await fetch(`${GATEWAY_BASE}/api/metrics`, { headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) throw new Error(data?.message || `HTTP ${res.status}`);
+      setMetrics(data);
+    } catch (err) {
+      setMetricsError(err?.message || 'Failed to fetch metrics');
+    } finally {
+      setMetricsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'health') return;
+    void refreshMetrics();
+    const tmr = setInterval(() => {
+      void refreshMetrics();
+    }, 5000);
+    return () => clearInterval(tmr);
+  }, [activeTab]);
+
+  const streamItems = useMemo(() => metrics?.streams?.items || [], [metrics]);
+  const recordingItems = useMemo(() => metrics?.recordings?.items || [], [metrics]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -116,6 +160,175 @@ export default function SettingsPage() {
                 <span className="text-sm text-slate-400 font-mono">v1.0.0</span>
               </SettingRow>
             </div>
+          </div>
+        );
+
+      case 'health':
+        return (
+          <div>
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-white mb-1">System Health</h3>
+                <p className="text-xs text-slate-500">Gateway metrics (auto-refresh every 5s)</p>
+              </div>
+              <button
+                onClick={() => void refreshMetrics()}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:bg-slate-800 transition-colors"
+              >
+                <RotateCw className={metricsLoading ? 'w-3.5 h-3.5 animate-spin' : 'w-3.5 h-3.5'} />
+                Refresh
+              </button>
+            </div>
+
+            {metricsError && (
+              <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" />
+                <span>{metricsError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="bg-slate-900/60 border border-slate-800/50 rounded-xl p-4 text-center">
+                <Gauge className="w-6 h-6 text-cyan-400 mx-auto mb-2" />
+                <p className="text-lg font-bold text-white">{metrics?.process?.uptimeSec ?? '—'}s</p>
+                <p className="text-xs text-slate-500 mt-1">Process Uptime</p>
+              </div>
+              <div className="bg-slate-900/60 border border-slate-800/50 rounded-xl p-4 text-center">
+                <Database className="w-6 h-6 text-amber-400 mx-auto mb-2" />
+                <p className="text-lg font-bold text-white">{formatBytes(metrics?.process?.memory?.rss)}</p>
+                <p className="text-xs text-slate-500 mt-1">Process RSS</p>
+              </div>
+              <div className="bg-slate-900/60 border border-slate-800/50 rounded-xl p-4 text-center">
+                <HardDrive className="w-6 h-6 text-emerald-400 mx-auto mb-2" />
+                <p className="text-lg font-bold text-white">{formatBytes(metrics?.os?.freeMemBytes)} / {formatBytes(metrics?.os?.totalMemBytes)}</p>
+                <p className="text-xs text-slate-500 mt-1">Free / Total Memory</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+              <div className="bg-slate-900/40 border border-slate-800/50 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-white">Streams</h4>
+                  <span className="text-xs text-slate-400 font-mono">{metrics?.streams?.counts?.running ?? 0} running</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Total</p>
+                    <p className="text-white font-semibold mt-1">{metrics?.streams?.counts?.total ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Starting</p>
+                    <p className="text-white font-semibold mt-1">{metrics?.streams?.counts?.starting ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Running</p>
+                    <p className="text-emerald-300 font-semibold mt-1">{metrics?.streams?.counts?.running ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Errors</p>
+                    <p className="text-red-300 font-semibold mt-1">{metrics?.streams?.counts?.error ?? 0}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/40 border border-slate-800/50 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-white">Recordings</h4>
+                  <span className="text-xs text-slate-400 font-mono">{metrics?.recordings?.counts?.recording ?? 0} active</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Total</p>
+                    <p className="text-white font-semibold mt-1">{metrics?.recordings?.counts?.total ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Recording</p>
+                    <p className="text-emerald-300 font-semibold mt-1">{metrics?.recordings?.counts?.recording ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Stopped</p>
+                    <p className="text-white font-semibold mt-1">{metrics?.recordings?.counts?.stopped ?? 0}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-lg p-3">
+                    <p className="text-slate-400">Errors</p>
+                    <p className="text-red-300 font-semibold mt-1">{metrics?.recordings?.counts?.error ?? 0}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-900/40 border border-slate-800/50 rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-800/40 flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-white">Active Streams</h4>
+                <span className="text-xs text-slate-500 font-mono">{metrics?.at || ''}</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-900/60">
+                    <tr className="text-slate-400">
+                      <th className="text-left px-5 py-3 font-medium">Camera</th>
+                      <th className="text-left px-5 py-3 font-medium">State</th>
+                      <th className="text-left px-5 py-3 font-medium">Mode</th>
+                      <th className="text-left px-5 py-3 font-medium">Started</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {streamItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-5 py-6 text-slate-500">No active streams</td>
+                      </tr>
+                    ) : (
+                      streamItems.map((s) => (
+                        <tr key={s.cameraId} className="border-t border-slate-800/30">
+                          <td className="px-5 py-3 text-slate-200 font-mono">{s.cameraId}</td>
+                          <td className="px-5 py-3">
+                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${
+                              s.state === 'running'
+                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                                : s.state === 'starting'
+                                ? 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                                : 'bg-red-500/10 text-red-300 border-red-500/20'
+                            }`}>
+                              {s.state}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-slate-300">{s.mode || '—'}</td>
+                          <td className="px-5 py-3 text-slate-500 font-mono">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString('en-US', { hour12: false }) : '—'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {recordingItems.length > 0 && (
+              <div className="mt-6 bg-slate-900/40 border border-slate-800/50 rounded-xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-800/40">
+                  <h4 className="text-sm font-semibold text-white">Active Recordings</h4>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-900/60">
+                      <tr className="text-slate-400">
+                        <th className="text-left px-5 py-3 font-medium">Camera</th>
+                        <th className="text-left px-5 py-3 font-medium">State</th>
+                        <th className="text-left px-5 py-3 font-medium">File</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recordingItems.map((r) => (
+                        <tr key={r.cameraId} className="border-t border-slate-800/30">
+                          <td className="px-5 py-3 text-slate-200 font-mono">{r.cameraId}</td>
+                          <td className="px-5 py-3 text-slate-300">{r.state}</td>
+                          <td className="px-5 py-3 text-slate-500 font-mono">{r.fileName || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         );
 

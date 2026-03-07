@@ -11,6 +11,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { cameraStore } from './cameraStore.js';
 import { streamManager } from './streamManager.js';
 import { sanitizeCamera, log } from './sanitize.js';
@@ -586,6 +587,57 @@ app.post('/api/discovery/auto', async (req, res) => {
     onvif: results.onvif,
     network: results.network,
     errors: results.errors,
+  });
+});
+
+app.get('/api/metrics', (req, res) => {
+  const streams = streamManager.status();
+  const recordings = streamManager.getAllRecordingStatus();
+
+  const streamList = Object.values(streams || {});
+  const recordingList = Object.values(recordings || {});
+
+  const streamCounts = {
+    total: streamList.length,
+    running: streamList.filter((s) => s.state === 'running').length,
+    starting: streamList.filter((s) => s.state === 'starting').length,
+    error: streamList.filter((s) => s.state === 'error').length,
+  };
+
+  const recordingCounts = {
+    total: recordingList.length,
+    recording: recordingList.filter((r) => r.state === 'recording').length,
+    stopped: recordingList.filter((r) => r.state === 'stopped').length,
+    error: recordingList.filter((r) => r.state === 'error').length,
+  };
+
+  res.json({
+    ok: true,
+    at: new Date().toISOString(),
+    process: {
+      pid: process.pid,
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      uptimeSec: Math.round(process.uptime()),
+      memory: process.memoryUsage(),
+    },
+    os: {
+      hostname: os.hostname(),
+      uptimeSec: os.uptime(),
+      totalMemBytes: os.totalmem(),
+      freeMemBytes: os.freemem(),
+      cpuCount: os.cpus()?.length || 0,
+      loadavg: os.loadavg(),
+    },
+    streams: {
+      counts: streamCounts,
+      items: streamList,
+    },
+    recordings: {
+      counts: recordingCounts,
+      items: recordingList,
+    },
   });
 });
 
