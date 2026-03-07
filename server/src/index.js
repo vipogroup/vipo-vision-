@@ -40,6 +40,15 @@ app.use(express.static(distDir, {
 app.use('/test', express.static(path.join(__dirname, '..', 'public')));
 
 // ─── HLS Static Files ──────────────────────────────────────────────
+app.use('/hls', (req, res, next) => {
+  try {
+    const parts = (req.path || '').split('/').filter(Boolean);
+    const cameraId = parts[0];
+    if (cameraId) streamManager.touch(cameraId);
+  } catch { /* ignore */ }
+  next();
+});
+
 app.use('/hls', express.static(streamManager.getHlsRoot(), {
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-cache, no-store');
@@ -98,6 +107,20 @@ app.post('/api/streams/start', async (req, res) => {
   const camera = cameraStore.getById(cameraId);
   if (!camera) {
     return res.status(404).json({ success: false, message: `Camera ${cameraId} not found in store` });
+  }
+
+  const desiredMode = camera.brand === 'CloseLi'
+    ? ((mode === 'hd' || mode === 'recording') ? 'recording' : 'live')
+    : 'default';
+
+  const existing = streamManager.getRawStream(cameraId);
+  if (existing && (existing.state === 'running' || existing.state === 'starting' || existing.state === 'streaming' || existing.state === 'buffering')) {
+    const existingMode = existing._liveProxy ? 'live' : 'recording';
+    if (desiredMode === 'default' || existingMode === desiredMode) {
+      streamManager.touch(cameraId);
+      return res.json({ success: true, stream: streamManager.getStream(cameraId), message: 'Stream already running' });
+    }
+    streamManager.stop(cameraId);
   }
 
   // CloseLi cameras:

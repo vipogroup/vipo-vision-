@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Video, Wifi, WifiOff, Maximize2, Move, Loader2, Circle, Square, RotateCw, FlipHorizontal2 } from 'lucide-react';
 import StatusBadge from './StatusBadge';
@@ -16,6 +16,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
   const [streamLoading, setStreamLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recLoading, setRecLoading] = useState(false);
+  const lastStreamModeRef = useRef(null);
   const [rotation, setRotation] = useState(() => {
     try { return parseInt(localStorage.getItem(`cam-rot-${camera.id}`)) || 0; } catch { return 0; }
   });
@@ -45,8 +46,23 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
   useEffect(() => {
     if (camera.status === 'offline') return;
     let cancelled = false;
+    const controller = new AbortController();
+    const shouldStopFirst = lastStreamModeRef.current != null && lastStreamModeRef.current !== streamMode;
+    lastStreamModeRef.current = streamMode;
     const startStream = async () => {
       setStreamLoading(true);
+      setHlsUrl(null);
+
+      if (shouldStopFirst) {
+        try {
+          await fetch(`${GATEWAY_BASE}/api/streams/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cameraId: camera.id }),
+            signal: controller.signal,
+          });
+        } catch { /* ignore */ }
+      }
 
       // Step 1: tell backend to start the stream
       // Use streamMode from Dashboard toggle: 'hd' = recording (1600x960), 'live' = TCP (640x360)
@@ -58,6 +74,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ cameraId: camera.id, mode }),
+            signal: controller.signal,
           });
           const data = await res.json();
           const url = data.hlsUrl || (data.stream && data.stream.hlsUrl);
@@ -71,7 +88,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
       for (let poll = 0; poll < 30 && !cancelled; poll++) {
         await new Promise(r => setTimeout(r, 2000));
         try {
-          const statusRes = await fetch(`${GATEWAY_BASE}/api/streams/status/${camera.id}`);
+          const statusRes = await fetch(`${GATEWAY_BASE}/api/streams/status/${camera.id}`, { signal: controller.signal });
           const status = await statusRes.json();
           if (status.state === 'running') {
             if (!cancelled) setHlsUrl(`${GATEWAY_BASE}${status.hlsUrl || hlsPath}`);
@@ -83,7 +100,10 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
       if (!cancelled) setStreamLoading(false);
     };
     startStream();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [camera.id, camera.status, streamMode]);
 
   const isLive = !!hlsUrl;

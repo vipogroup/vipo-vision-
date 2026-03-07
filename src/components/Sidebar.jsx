@@ -34,8 +34,10 @@ export default function Sidebar() {
   const location = useLocation();
 
   useEffect(() => {
-    setMobileOpen(false);
-  }, [location.pathname]);
+    if (!mobileOpen) return;
+    const tmr = setTimeout(() => setMobileOpen(false), 0);
+    return () => clearTimeout(tmr);
+  }, [location.pathname, mobileOpen]);
 
   const sidebarContent = (showLabels) => (
     <>

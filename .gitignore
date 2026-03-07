@@ -16,6 +16,11 @@ dist-ssr
 server/hls
 server/data
 server/node_modules
+server/recordings
+recordings
+
+# Dev build artifacts (PWA dev)
+dev-dist
 
 # Editor directories and files
 .vscode/*

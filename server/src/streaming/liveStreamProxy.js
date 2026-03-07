@@ -211,8 +211,12 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
   let lastPpsNal = null;
 
   function startFfmpeg() {
-    // Use 20fps output — smooth motion with good CPU balance
-    const outFps = 20;
+    const outFps = Number(process.env.LIVE_OUT_FPS || 15);
+    const preset = process.env.LIVE_X264_PRESET || 'veryfast';
+    const crf = String(process.env.LIVE_CRF || '23');
+    const profile = process.env.LIVE_PROFILE || 'main';
+    const maxrate = process.env.LIVE_MAXRATE || '2500k';
+    const bufsize = process.env.LIVE_BUFSIZE || '5000k';
     const args = [
       '-y',
       '-fflags', '+genpts+discardcorrupt+nobuffer',
@@ -222,15 +226,14 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       '-analyzeduration', '2000000',
       '-f', 'h264',
       '-i', 'pipe:0',
-      // Regenerate timestamps + deinterlace for maximum quality
-      '-vf', `yadif=0:-1:0,setpts=N/(${outFps}*TB)`,
+      '-vf', `setpts=N/(${outFps}*TB)`,
       '-c:v', 'libx264',
-      '-preset', 'medium',
+      '-preset', preset,
       '-tune', 'zerolatency',
-      '-profile:v', 'high',
-      '-crf', '18',
-      '-maxrate', '5000k',
-      '-bufsize', '10000k',
+      '-profile:v', profile,
+      '-crf', crf,
+      '-maxrate', maxrate,
+      '-bufsize', bufsize,
       '-pix_fmt', 'yuv420p',
       '-r', String(outFps),
       '-vsync', 'cfr',

@@ -20,6 +20,36 @@ const activeStreams = new Map();
 const activeRecordings = new Map(); // cameraId → { process, filePath, startedAt }
 const closeLiMeta = new Map(); // cameraId → { ip, port, channel, lastFile } for auto-restart
 
+const STREAM_IDLE_TTL_LIVE_MS = Number(process.env.STREAM_IDLE_TTL_LIVE_MS || 90_000);
+const STREAM_IDLE_TTL_HTTP_MS = Number(process.env.STREAM_IDLE_TTL_HTTP_MS || 180_000);
+const STREAM_IDLE_TTL_RTSP_MS = Number(process.env.STREAM_IDLE_TTL_RTSP_MS || 180_000);
+const STREAM_CLEANUP_INTERVAL_MS = Number(process.env.STREAM_CLEANUP_INTERVAL_MS || 30_000);
+
+function getIdleTtlMs(stream) {
+  if (!stream) return STREAM_IDLE_TTL_RTSP_MS;
+  if (stream.sourceType === 'tcp_live' || stream.mode === 'live' || stream._liveProxy) return STREAM_IDLE_TTL_LIVE_MS;
+  if (stream.sourceType === 'http') return STREAM_IDLE_TTL_HTTP_MS;
+  return STREAM_IDLE_TTL_RTSP_MS;
+}
+
+const _cleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [cameraId, stream] of activeStreams) {
+    if (!stream || stream.state === 'stopped') continue;
+    const last = stream.lastAccessedAt || 0;
+    const ttl = getIdleTtlMs(stream);
+    if (last && now - last > ttl) {
+      log('info', `[${cameraId}] Idle TTL exceeded (${Math.round((now - last) / 1000)}s > ${Math.round(ttl / 1000)}s), stopping stream`);
+      try {
+        streamManager.stop(cameraId);
+      } catch (err) {
+        log('warn', `[${cameraId}] Idle cleanup failed: ${err.message}`);
+      }
+    }
+  }
+}, STREAM_CLEANUP_INTERVAL_MS);
+if (typeof _cleanupTimer.unref === 'function') _cleanupTimer.unref();
+
 const COPY_FAIL_PATTERNS = [
   'non monotonically increasing dts',
   'Could not find codec',
@@ -71,14 +101,14 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
     if (transcode) {
       args.push(
         '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v', 'baseline',
-        '-b:v', '4000k',
-        '-maxrate', '4000k',
-        '-bufsize', '8000k',
-        '-g', '16',
-        '-keyint_min', '16',
+        '-preset', 'veryfast',
+        '-profile:v', 'main',
+        '-crf', '22',
+        '-maxrate', '5000k',
+        '-bufsize', '10000k',
+        '-g', '30',
+        '-keyint_min', '15',
+        '-sc_threshold', '0',
         '-force_key_frames', 'expr:gte(t,n_forced*2)',
       );
     } else {
@@ -129,7 +159,7 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
   if (clean) cleanDir(hlsDir);
 
   const sourceType = isHttpSource(inputUrl) ? 'http' : 'rtsp';
-  const mode = sourceType === 'http' ? 'transcode' : (transcode ? 'transcode' : 'copy');
+  const mode = sourceType === 'http' ? (transcode ? 'transcode' : 'copy') : (transcode ? 'transcode' : 'copy');
   log('info', `[${cameraId}] Starting FFmpeg (${mode}, ${sourceType}) for ${sanitizeUrl(inputUrl)}`);
 
   const { args, playlistPath } = buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode);
@@ -147,6 +177,7 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
     mode,
     sourceType,
     startedAt: new Date().toISOString(),
+    lastAccessedAt: Date.now(),
     hlsUrl: `/hls/${cameraId}/index.m3u8`,
     playlistPath,
     hlsDir,
@@ -204,7 +235,7 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
           if (result && !stream._stopRequested) {
             meta.lastFile = result.fname;
             log('info', `[${cameraId}] CloseLi next file: ${result.fname}`);
-            const next = spawnFfmpeg(cameraId, result.url, true, false);
+            const next = spawnFfmpeg(cameraId, result.url, false, false);
             activeStreams.set(cameraId, next);
           } else {
             log('info', `[${cameraId}] CloseLi: waiting for new recording segment...`);
@@ -215,7 +246,7 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
                 if (r) {
                   meta.lastFile = r.fname;
                   log('info', `[${cameraId}] CloseLi new segment: ${r.fname}`);
-                  const s = spawnFfmpeg(cameraId, r.url, true, false);
+                  const s = spawnFfmpeg(cameraId, r.url, false, false);
                   activeStreams.set(cameraId, s);
                 } else {
                   setTimeout(() => poll(attempts - 1), 5000);
@@ -256,6 +287,11 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
 export const streamManager = {
   getHlsRoot() {
     return HLS_ROOT;
+  },
+
+  touch(cameraId) {
+    const s = activeStreams.get(cameraId);
+    if (s) s.lastAccessedAt = Date.now();
   },
 
   setCloseLiMeta(cameraId, meta) {
@@ -314,6 +350,7 @@ export const streamManager = {
       mode: 'live',
       sourceType: 'tcp_live',
       startedAt: new Date().toISOString(),
+      lastAccessedAt: Date.now(),
       hlsUrl: `/hls/${cameraId}/index.m3u8`,
       playlistPath: path.join(hlsDir, 'index.m3u8'),
       hlsDir,
