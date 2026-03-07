@@ -49,13 +49,15 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
       setStreamLoading(true);
 
       // Step 1: tell backend to start the stream
+      // Use 'recording' mode for CloseLi cameras to get HD (1600x960) instead of SD TCP live
+      const mode = camera.brand === 'CloseLi' ? 'recording' : 'live';
       let hlsPath = null;
       for (let retry = 0; retry < 3 && !cancelled; retry++) {
         try {
           const res = await fetch(`${GATEWAY_BASE}/api/streams/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cameraId: camera.id }),
+            body: JSON.stringify({ cameraId: camera.id, mode }),
           });
           const data = await res.json();
           const url = data.hlsUrl || (data.stream && data.stream.hlsUrl);
@@ -150,38 +152,38 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
           </div>
         ) : null}
 
-        <div className="absolute top-2 left-2 right-2 flex items-center justify-between">
+        <div className="absolute top-1 sm:top-2 left-1 sm:left-2 right-1 sm:right-2 flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <StatusBadge status={camera.status} />
             {camera.ptzSupported && !compact && (
-              <div className="flex items-center gap-1 bg-cyan-500/10 backdrop-blur-sm border border-cyan-500/20 px-1.5 py-0.5 rounded-full">
-                <Move className="w-2.5 h-2.5 text-cyan-400" />
-                <span className="text-[9px] font-semibold text-cyan-400">PTZ</span>
+              <div className="flex items-center gap-0.5 sm:gap-1 bg-cyan-500/10 backdrop-blur-sm border border-cyan-500/20 px-1 sm:px-1.5 py-0.5 rounded-full">
+                <Move className="w-2 sm:w-2.5 h-2 sm:h-2.5 text-cyan-400" />
+                <span className="text-[8px] sm:text-[9px] font-semibold text-cyan-400">PTZ</span>
               </div>
             )}
           </div>
           <div className="flex items-center gap-1.5">
             {!compact && telemetry && (
-              <div className="bg-slate-900/60 backdrop-blur-sm px-1.5 py-0.5 rounded-full">
+              <div className="bg-slate-900/60 backdrop-blur-sm px-1 sm:px-1.5 py-0.5 rounded-full">
                 <TelemetryBadge telemetry={telemetry} compact />
               </div>
             )}
             {isRecording && (
-              <div className="flex items-center gap-1 bg-red-500/20 backdrop-blur-sm border border-red-500/30 px-2 py-0.5 rounded-full">
+              <div className="flex items-center gap-0.5 sm:gap-1 bg-red-500/20 backdrop-blur-sm border border-red-500/30 px-1.5 sm:px-2 py-0.5 rounded-full">
                 <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse-dot" />
-                <span className="text-[10px] font-semibold text-red-400">REC</span>
+                <span className="text-[9px] sm:text-[10px] font-semibold text-red-400">REC</span>
               </div>
             )}
           </div>
         </div>
 
-        <div className="absolute bottom-2 right-2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute bottom-1 sm:bottom-2 right-1 sm:right-2 flex items-center gap-1 sm:gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={cycleRotation}
-            className="p-1.5 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 text-slate-300 hover:text-cyan-400 transition-colors"
+            className="p-0.5 sm:p-1 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 text-slate-300 hover:text-cyan-400 transition-colors"
             title={`סובב (${rotation}°)`}
           >
-            <RotateCw className="w-3.5 h-3.5" />
+            <RotateCw className="w-2.5 sm:w-3 h-2.5 sm:h-3" />
           </button>
           <button
             onClick={toggleMirror}
@@ -192,7 +194,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
             }`}
             title={mirrored ? 'בטל שיקוף' : 'שיקוף'}
           >
-            <FlipHorizontal2 className="w-3.5 h-3.5" />
+            <FlipHorizontal2 className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
           </button>
           <button
             onClick={toggleRecording}
@@ -205,9 +207,9 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
             title={isRecording ? 'עצור הקלטה' : 'התחל הקלטה'}
           >
             {isRecording ? (
-              <Square className="w-3.5 h-3.5 fill-current" />
+              <Square className="w-3 sm:w-3.5 h-3 sm:h-3.5 fill-current" />
             ) : (
-              <Circle className="w-3.5 h-3.5 fill-red-500 text-red-500" />
+              <Circle className="w-3 sm:w-3.5 h-3 sm:h-3.5 fill-red-500 text-red-500" />
             )}
           </button>
           {camera.ptzSupported && (
@@ -216,10 +218,10 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
                 e.stopPropagation();
                 setShowMiniPTZ((v) => !v);
               }}
-              className="p-1.5 bg-cyan-500/15 backdrop-blur-sm rounded-lg border border-cyan-500/25 text-cyan-400 hover:bg-cyan-500/25 transition-colors"
+              className="p-1 sm:p-1.5 bg-cyan-500/15 backdrop-blur-sm rounded-lg border border-cyan-500/25 text-cyan-400 hover:bg-cyan-500/25 transition-colors"
               title="Quick PTZ Control"
             >
-              <Move className="w-3.5 h-3.5" />
+              <Move className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
             </button>
           )}
           <button
@@ -227,23 +229,23 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
               e.stopPropagation();
               navigate(`/camera/${camera.id}`);
             }}
-            className="p-1.5 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 text-slate-300 hover:text-white transition-colors"
+            className="p-1 sm:p-1.5 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 text-slate-300 hover:text-white transition-colors"
           >
-            <Maximize2 className="w-3.5 h-3.5" />
+            <Maximize2 className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
           </button>
         </div>
 
         {!compact && (
-          <div className="absolute bottom-2 left-2">
-            <div className="flex items-center gap-1 bg-slate-900/70 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-slate-400 font-mono">
-              <Wifi className="w-3 h-3" />
+          <div className="absolute bottom-1 sm:bottom-2 left-1 sm:left-2">
+            <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-900/70 backdrop-blur-sm px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[10px] text-slate-400 font-mono">
+              <Wifi className="w-2.5 sm:w-3 h-2.5 sm:h-3" />
               {camera.type}
             </div>
           </div>
         )}
       </div>
 
-      <div className={fillHeight ? 'px-2 py-1 flex items-center justify-between flex-shrink-0' : 'p-3'}>
+      <div className={fillHeight ? 'px-1.5 sm:px-2 py-0.5 sm:py-1 flex items-center justify-between flex-shrink-0' : 'p-2 sm:p-3'}>
         <h3 className={`${fillHeight ? 'text-xs' : 'text-sm'} font-semibold text-white truncate group-hover:text-cyan-400 transition-colors`}>
           {camera.name}
         </h3>

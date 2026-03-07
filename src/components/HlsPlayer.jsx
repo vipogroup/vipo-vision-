@@ -3,12 +3,16 @@ import Hls from 'hls.js';
 
 const HLS_CONFIG = {
   enableWorker: true,
-  lowLatencyMode: true,
+  lowLatencyMode: false,
   liveSyncDurationCount: 3,
-  liveMaxLatencyDurationCount: 6,
+  liveMaxLatencyDurationCount: 10,
   liveDurationInfinity: true,
-  maxBufferLength: 4,
-  maxMaxBufferLength: 8,
+  maxBufferLength: 15,
+  maxMaxBufferLength: 30,
+  backBufferLength: 15,
+  startLevel: -1,
+  autoLevelCapping: -1,
+  abrEwmaDefaultEstimate: 5000000,
   manifestLoadingMaxRetry: 10,
   manifestLoadingRetryDelay: 2000,
   levelLoadingMaxRetry: 10,
@@ -79,7 +83,7 @@ export default function HlsPlayer({ hlsUrl, autoplay = true, muted = true }) {
       playsInline
       webkit-playsinline=""
       className="w-full h-full object-contain bg-black"
-      style={{ minHeight: 0 }}
+      style={{ minHeight: 0, imageRendering: 'crisp-edges', WebkitBackfaceVisibility: 'hidden', WebkitFontSmoothing: 'antialiased' }}
     />
   );
 }

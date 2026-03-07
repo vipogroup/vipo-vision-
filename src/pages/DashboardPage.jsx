@@ -27,9 +27,9 @@ export default function DashboardPage() {
   return (
     <>
       <Header title={t('dashboard.title')} subtitle={`${cameras.length} ${t('nav.cameras').toLowerCase()}`} />
-      <div className="flex-1 flex flex-col p-2 gap-2 min-h-0 overflow-hidden">
-        <div className="flex items-center justify-between flex-shrink-0 flex-wrap gap-2">
-          <div className="flex items-center gap-2 md:gap-3">
+      <div className="flex-1 flex flex-col p-1 sm:p-2 gap-1.5 sm:gap-2 min-h-0 overflow-hidden">
+        <div className="flex items-center justify-between flex-shrink-0 flex-wrap gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3">
             {gridOptions.map((opt) => (
               <button
                 key={opt.size}

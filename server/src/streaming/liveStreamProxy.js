@@ -211,25 +211,42 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
   let lastPpsNal = null;
 
   function startFfmpeg() {
+    // Use 20fps output — smooth motion with good CPU balance
+    const outFps = 20;
     const args = [
       '-y',
-      '-fflags', '+genpts+discardcorrupt',
-      '-use_wallclock_as_timestamps', '1',
-      '-probesize', '5000000',
-      '-analyzeduration', '5000000',
+      '-fflags', '+genpts+discardcorrupt+nobuffer',
+      '-flags', 'low_delay',
+      '-err_detect', 'ignore_err',
+      '-probesize', '2000000',
+      '-analyzeduration', '2000000',
       '-f', 'h264',
       '-i', 'pipe:0',
-      '-c:v', 'copy',
-      '-bsf:v', 'dump_extra',
+      // Regenerate timestamps + deinterlace for maximum quality
+      '-vf', `yadif=0:-1:0,setpts=N/(${outFps}*TB)`,
+      '-c:v', 'libx264',
+      '-preset', 'medium',
+      '-tune', 'zerolatency',
+      '-profile:v', 'high',
+      '-crf', '18',
+      '-maxrate', '5000k',
+      '-bufsize', '10000k',
+      '-pix_fmt', 'yuv420p',
+      '-r', String(outFps),
+      '-vsync', 'cfr',
+      '-g', String(outFps * 2),
+      '-keyint_min', String(outFps),
+      '-sc_threshold', '0',
+      '-an',
       '-f', 'hls',
       '-hls_time', '2',
-      '-hls_list_size', '4',
+      '-hls_list_size', '5',
       '-hls_flags', 'delete_segments+append_list+independent_segments',
       '-hls_segment_filename', segPattern,
       hlsPath,
     ];
 
-    log('info', `[${streamId}] Starting FFmpeg for channel ${channel} (copy mode)`);
+    log('info', `[${streamId}] Starting FFmpeg for channel ${channel} (transcode mode)`);
     const ffmpeg = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
     let lastProgressLogAt = 0;

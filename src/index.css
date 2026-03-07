@@ -36,6 +36,11 @@ body {
   min-height: 100dvh;
   font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
   padding:
     env(safe-area-inset-top)
     env(safe-area-inset-right)

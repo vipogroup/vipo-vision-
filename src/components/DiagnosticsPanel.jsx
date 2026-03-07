@@ -643,9 +643,28 @@ function buildTestSuites(cameras) {
               throw new Error('FFprobe returned no video data');
             }
             const q = data.quality;
+            const hw = data.hardware;
             const s = data.stream;
             const uptimeMin = s?.uptime ? `${Math.floor(s.uptime / 60)}m${s.uptime % 60}s` : 'N/A';
-            return `${q.width}x${q.height} | ${q.codec} (${q.profile}) | ${q.fps} fps | ${q.bitrate} | uptime: ${uptimeMin}`;
+            // Quality analysis
+            const warnings = [];
+            const pixels = q.width * q.height;
+            if (pixels < 480 * 360) warnings.push('VERY LOW RES');
+            else if (pixels < 1280 * 720) warnings.push('SD quality');
+            // Compare to configured resolution
+            if (hw?.configuredResolution) {
+              const [cfgW] = hw.configuredResolution.split('x').map(Number);
+              if (cfgW && q.width < cfgW * 0.5) warnings.push(`expected ${hw.configuredResolution}`);
+            }
+            // Check FPS
+            const actualFps = q.fps.includes('/') ? parseInt(q.fps.split('/')[0]) : parseInt(q.fps);
+            if (actualFps < 20) warnings.push(`low FPS (${actualFps})`);
+            // Check profile
+            if (q.profile !== 'High') warnings.push(`profile: ${q.profile} (High recommended)`);
+            
+            const grade = pixels >= 1280 * 720 ? 'HD' : pixels >= 640 * 360 ? 'SD' : 'LOW';
+            const warn = warnings.length > 0 ? ` ⚠ ${warnings.join(', ')}` : ' ✅';
+            return `[${grade}] ${q.width}x${q.height} | ${q.codec} (${q.profile}) | ${actualFps}fps | ${q.bitrate} | ${uptimeMin}${warn}`;
           },
         })),
       ],

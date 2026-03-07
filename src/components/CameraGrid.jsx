@@ -2,8 +2,8 @@ import CameraCard from './CameraCard';
 
 const gridClasses = {
   1: 'grid-cols-1 grid-rows-1',
-  4: 'grid-cols-1 sm:grid-cols-2 sm:grid-rows-2',
-  9: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 lg:grid-rows-3',
+  4: 'grid-cols-2 grid-rows-2',
+  9: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 lg:grid-rows-3',
   16: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 lg:grid-rows-4',
 };
 
@@ -13,7 +13,7 @@ export default function CameraGrid({ cameras, gridSize = 4 }) {
   const compact = gridSize >= 9;
 
   return (
-    <div className={`grid ${cols} gap-3 h-full`}>
+    <div className={`grid ${cols} gap-1.5 sm:gap-2 md:gap-3 h-full`}>
       {displayCameras.map((camera) => (
         <CameraCard key={camera.id} camera={camera} compact={compact} fillHeight />
       ))}
