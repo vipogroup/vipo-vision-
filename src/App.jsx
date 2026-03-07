@@ -15,6 +15,7 @@ import EventsPage from './pages/EventsPage';
 import SettingsPage from './pages/SettingsPage';
 import DiscoverCamerasPage from './pages/DiscoverCamerasPage';
 import { cameraStore } from './stores/cameraStore';
+import UpdateNotifier from './components/UpdateNotifier';
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated } = useAuth();
@@ -63,16 +64,19 @@ export default function App() {
   }, []);
 
   return (
-    <HashRouter>
-      <AuthProvider>
-        <TelemetryProvider>
-          <UIZoomProvider>
-            <LanguageProvider>
-              <AppRoutes />
-            </LanguageProvider>
-          </UIZoomProvider>
-        </TelemetryProvider>
-      </AuthProvider>
-    </HashRouter>
+    <>
+      <UpdateNotifier />
+      <HashRouter>
+        <AuthProvider>
+          <TelemetryProvider>
+            <UIZoomProvider>
+              <LanguageProvider>
+                <AppRoutes />
+              </LanguageProvider>
+            </UIZoomProvider>
+          </TelemetryProvider>
+        </AuthProvider>
+      </HashRouter>
+    </>
   );
 }
