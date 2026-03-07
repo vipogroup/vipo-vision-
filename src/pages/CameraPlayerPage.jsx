@@ -128,7 +128,9 @@ export default function CameraPlayerPage() {
     setStreamState('starting');
     setStreamError(null);
     try {
-      const result = await cameraDiscoveryService.apiStartStream(id);
+      // Stop existing TCP stream first, then start HD recording stream
+      await cameraDiscoveryService.apiStopStream(id).catch(() => {});
+      const result = await cameraDiscoveryService.apiStartStream(id, 'hd');
       if (result.success && result.stream) {
         setStreamHlsUrl(`${GATEWAY_BASE}${result.stream.hlsUrl}`);
         setStreamState(result.stream.state === 'running' ? 'running' : 'starting');
@@ -150,6 +152,14 @@ export default function CameraPlayerPage() {
     setStreamHlsUrl(null);
     setStreamError(null);
   }, [id]);
+
+  // Auto-start stream when page loads and camera is online
+  useEffect(() => {
+    if (camera && camera.status !== 'offline' && streamState === 'stopped') {
+      const t = setTimeout(handleStartStream, 0);
+      return () => clearTimeout(t);
+    }
+  }, [camera?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll stream status while starting
   useEffect(() => {

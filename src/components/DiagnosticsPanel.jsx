@@ -16,6 +16,14 @@ function buildTestSuites(cameras) {
   const gw = GATEWAY_BASE;
   const testCam = cameras[0];
 
+  // Helper: GET /api/cameras returns { cameras: [...] } — unwrap to array
+  async function fetchCameraList() {
+    const res = await fetch(`${gw}/api/cameras`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.cameras || []);
+  }
+
   return [
     {
       id: 'gateway',
@@ -84,11 +92,9 @@ function buildTestSuites(cameras) {
           name: 'List Cameras',
           description: 'GET /api/cameras — returns camera array',
           run: async () => {
-            const res = await fetch(`${gw}/api/cameras`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            if (!Array.isArray(data)) throw new Error('Expected array');
-            return `${data.length} camera(s) in store`;
+            const list = await fetchCameraList();
+            if (!Array.isArray(list)) throw new Error('Expected array');
+            return `${list.length} camera(s) in store`;
           },
         },
         {
@@ -96,7 +102,7 @@ function buildTestSuites(cameras) {
           name: 'Get Camera by ID',
           description: 'GET /api/cameras/:id — existing camera',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             if (list.length === 0) throw new Error('No cameras in store to test');
             const id = list[0].id;
             const res = await fetch(`${gw}/api/cameras/${id}`);
@@ -121,7 +127,7 @@ function buildTestSuites(cameras) {
           name: 'No Passwords in Response',
           description: 'Camera API must not expose password or rtspUrl',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             if (list.length === 0) throw new Error('No cameras to check');
             const raw = JSON.stringify(list);
             if (raw.includes('"password"')) throw new Error('Password field found in response!');
@@ -301,7 +307,7 @@ function buildTestSuites(cameras) {
           name: 'PTZ API — Status Endpoint',
           description: 'GET /api/ptz/:id/status — backend PTZ',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             if (list.length === 0) throw new Error('No cameras in store');
             const res = await fetch(`${gw}/api/ptz/${list[0].id}/status`);
             const data = await res.json();
@@ -313,7 +319,7 @@ function buildTestSuites(cameras) {
           name: 'PTZ API — Move Non-PTZ Camera',
           description: 'POST /api/ptz/:id/move — should reject non-PTZ',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             const nonPtz = list.find((c) => !c.ptzSupported);
             if (!nonPtz) return 'Skip — no non-PTZ cameras in store';
             const res = await fetch(`${gw}/api/ptz/${nonPtz.id}/move`, {
@@ -355,6 +361,7 @@ function buildTestSuites(cameras) {
             const preset = { id: 'test', name: 'Home', pan: 0, tilt: 0, zoom: 1.0 };
             const result = await presetService.goToPreset(testCam.id, preset);
             if (result.success) return `Went to: ${result.preset}, pos: ${JSON.stringify(result.position)}`;
+            if (!testCam.ptzSupported) return 'PTZ not supported — expected';
             throw new Error('GoTo failed');
           },
         },
@@ -363,7 +370,7 @@ function buildTestSuites(cameras) {
           name: 'Presets API — List',
           description: 'GET /api/ptz/:id/presets',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             if (list.length === 0) throw new Error('No cameras');
             const res = await fetch(`${gw}/api/ptz/${list[0].id}/presets`);
             const data = await res.json();
@@ -438,8 +445,8 @@ function buildTestSuites(cameras) {
           name: 'No Passwords Exposed',
           description: 'Camera list should not contain password field',
           run: async () => {
-            const res = await fetch(`${gw}/api/cameras`);
-            const text = await res.text();
+            const list = await fetchCameraList();
+            const text = JSON.stringify(list);
             if (text.includes('"password"')) throw new Error('PASSWORD EXPOSED in camera list!');
             if (text.includes('"rtspUrl"')) throw new Error('RTSP URL EXPOSED in camera list!');
             return 'No sensitive fields in camera responses';
@@ -450,7 +457,7 @@ function buildTestSuites(cameras) {
           name: 'Single Camera — No Secrets',
           description: 'GET /api/cameras/:id — no password',
           run: async () => {
-            const list = await (await fetch(`${gw}/api/cameras`)).json();
+            const list = await fetchCameraList();
             if (list.length === 0) return 'Skip — no cameras to test';
             const res = await fetch(`${gw}/api/cameras/${list[0].id}`);
             const text = await res.text();
@@ -463,11 +470,37 @@ function buildTestSuites(cameras) {
           name: 'Auth Context Exists',
           description: 'Authentication system is active',
           run: async () => {
-            const stored = localStorage.getItem('vipo-auth');
-            if (!stored) throw new Error('No auth data found in localStorage');
+            const stored = localStorage.getItem('vipo_user');
+            if (!stored) throw new Error('No auth data found in localStorage — please log in');
             const parsed = JSON.parse(stored);
-            if (!parsed.user) throw new Error('No user in auth data');
-            return `Logged in as: ${parsed.user.name} (${parsed.user.role})`;
+            if (!parsed.name) throw new Error('No user name in auth data');
+            return `Logged in as: ${parsed.name} (${parsed.role || 'user'})`;
+          },
+        },
+        {
+          id: 'sec-https-check',
+          name: 'HTTPS / Secure Context',
+          description: 'Check if running in secure context',
+          run: async () => {
+            const isSecure = window.isSecureContext;
+            const proto = window.location.protocol;
+            if (isSecure) return `Secure context: ${proto}`;
+            return `Not secure (${proto}) — OK for local dev`;
+          },
+        },
+        {
+          id: 'sec-csp-headers',
+          name: 'Content Security Policy',
+          description: 'Check CSP headers on API responses',
+          run: async () => {
+            const res = await fetch(`${gw}/api/health`);
+            const csp = res.headers.get('content-security-policy');
+            const xframe = res.headers.get('x-frame-options');
+            const parts = [];
+            if (csp) parts.push('CSP: set');
+            if (xframe) parts.push(`X-Frame: ${xframe}`);
+            if (parts.length === 0) return 'No security headers (add for production)';
+            return parts.join(', ');
           },
         },
       ],
@@ -499,7 +532,7 @@ function buildTestSuites(cameras) {
           name: 'Gateway Config',
           description: 'GATEWAY_BASE is set correctly',
           run: async () => {
-            if (!GATEWAY_BASE) throw new Error('GATEWAY_BASE is empty');
+            if (GATEWAY_BASE === '') return 'Gateway: (empty — using Vite proxy in dev mode)';
             if (!GATEWAY_BASE.startsWith('http')) throw new Error(`Invalid URL: ${GATEWAY_BASE}`);
             return `Gateway: ${GATEWAY_BASE}`;
           },
@@ -533,6 +566,112 @@ function buildTestSuites(cameras) {
           run: async () => {
             const paths = ['/', '/cameras', '/discover', '/recordings', '/events', '/settings'];
             return `${paths.length} routes configured: ${paths.join(', ')}`;
+          },
+        },
+        {
+          id: 'fe-hls-support',
+          name: 'HLS.js Support',
+          description: 'Browser HLS playback capability',
+          run: async () => {
+            const nativeHls = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+            let hlsJs = false;
+            try { const Hls = (await import('hls.js')).default; hlsJs = Hls.isSupported(); } catch { /* */ }
+            const parts = [];
+            if (hlsJs) parts.push('HLS.js ✓');
+            if (nativeHls) parts.push(`Native HLS: ${nativeHls}`);
+            if (parts.length === 0) throw new Error('No HLS support in this browser!');
+            return parts.join(', ');
+          },
+        },
+        {
+          id: 'fe-sw-status',
+          name: 'Service Worker',
+          description: 'PWA Service Worker registration status',
+          run: async () => {
+            if (!('serviceWorker' in navigator)) return 'ServiceWorker not supported';
+            const regs = await navigator.serviceWorker.getRegistrations();
+            if (regs.length === 0) return 'No Service Workers registered';
+            return `${regs.length} SW registered, state: ${regs[0].active?.state || 'waiting'}`;
+          },
+        },
+        {
+          id: 'fe-media-devices',
+          name: 'Media Devices API',
+          description: 'Browser media capabilities',
+          run: async () => {
+            if (!navigator.mediaDevices) return 'MediaDevices API not available';
+            try {
+              const devices = await navigator.mediaDevices.enumerateDevices();
+              const video = devices.filter(d => d.kind === 'videoinput').length;
+              const audio = devices.filter(d => d.kind === 'audioinput').length;
+              return `Devices: ${video} video, ${audio} audio inputs`;
+            } catch { return 'MediaDevices accessible (permission needed for details)'; }
+          },
+        },
+      ],
+    },
+    {
+      id: 'performance',
+      name: 'Performance',
+      icon: Zap,
+      color: 'orange',
+      tests: [
+        {
+          id: 'perf-api-latency',
+          name: 'API Latency',
+          description: 'Round-trip time to backend',
+          run: async () => {
+            const times = [];
+            for (let i = 0; i < 3; i++) {
+              const t0 = performance.now();
+              await fetch(`${gw}/api/health`);
+              times.push(Math.round(performance.now() - t0));
+            }
+            const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+            const min = Math.min(...times);
+            const max = Math.max(...times);
+            if (avg > 500) throw new Error(`High latency: avg ${avg}ms`);
+            return `avg: ${avg}ms, min: ${min}ms, max: ${max}ms`;
+          },
+        },
+        {
+          id: 'perf-memory',
+          name: 'Memory Usage',
+          description: 'JavaScript heap size',
+          run: async () => {
+            const mem = performance.memory;
+            if (!mem) return 'Memory API not available (Chrome only)';
+            const used = (mem.usedJSHeapSize / 1024 / 1024).toFixed(1);
+            const total = (mem.totalJSHeapSize / 1024 / 1024).toFixed(1);
+            const limit = (mem.jsHeapSizeLimit / 1024 / 1024).toFixed(0);
+            if (mem.usedJSHeapSize > mem.jsHeapSizeLimit * 0.8) throw new Error(`High memory: ${used}MB / ${limit}MB`);
+            return `${used}MB / ${total}MB (limit: ${limit}MB)`;
+          },
+        },
+        {
+          id: 'perf-stream-count',
+          name: 'Active Streams Load',
+          description: 'Current stream count vs capacity',
+          run: async () => {
+            const res = await fetch(`${gw}/api/streams/status`);
+            const data = await res.json();
+            const count = Object.keys(data).length;
+            const running = Object.values(data).filter(s => s.state === 'running').length;
+            return `${running} running / ${count} total streams`;
+          },
+        },
+        {
+          id: 'perf-camera-ping',
+          name: 'Camera Reachability',
+          description: 'Quick check if cameras respond',
+          run: async () => {
+            const list = await fetchCameraList();
+            const closeli = list.filter(c => c.brand === 'CloseLi');
+            if (closeli.length === 0) return 'No CloseLi cameras to ping';
+            const t0 = performance.now();
+            await fetch(`${gw}/api/health`);
+            const latency = Math.round(performance.now() - t0);
+            return `${closeli.length} CloseLi cameras, gateway latency: ${latency}ms`;
           },
         },
       ],

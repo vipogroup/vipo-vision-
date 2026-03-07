@@ -47,9 +47,9 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
     let cancelled = false;
     const startStream = async () => {
       setStreamLoading(true);
-      // Stagger starts: cam-002 +3s, cam-003 +6s, cam-004 +9s
-      const idx = parseInt(camera.id.replace(/\D/g, ''), 10) || 1;
-      if (idx > 1) await new Promise(r => setTimeout(r, (idx - 1) * 3000));
+
+      // Step 1: tell backend to start the stream
+      let hlsPath = null;
       for (let retry = 0; retry < 3 && !cancelled; retry++) {
         try {
           const res = await fetch(`${GATEWAY_BASE}/api/streams/start`, {
@@ -59,12 +59,24 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
           });
           const data = await res.json();
           const url = data.hlsUrl || (data.stream && data.stream.hlsUrl);
-          if (url && !cancelled) {
-            setHlsUrl(`${GATEWAY_BASE}${url}`);
-            break;
-          }
+          if (url) { hlsPath = url; break; }
           if (!data.success) await new Promise(r => setTimeout(r, 5000));
         } catch { await new Promise(r => setTimeout(r, 5000)); }
+      }
+      if (!hlsPath || cancelled) { if (!cancelled) setStreamLoading(false); return; }
+
+      // Step 2: poll status until stream is 'running' (m3u8 ready)
+      for (let poll = 0; poll < 30 && !cancelled; poll++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const statusRes = await fetch(`${GATEWAY_BASE}/api/streams/status/${camera.id}`);
+          const status = await statusRes.json();
+          if (status.state === 'running') {
+            if (!cancelled) setHlsUrl(`${GATEWAY_BASE}${status.hlsUrl || hlsPath}`);
+            break;
+          }
+          if (status.state === 'error') break;
+        } catch { /* retry */ }
       }
       if (!cancelled) setStreamLoading(false);
     };

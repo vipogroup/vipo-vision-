@@ -54,14 +54,29 @@ app.get('/api/cameras', (req, res) => {
   res.json({ cameras });
 });
 
-app.post('/api/cameras', (req, res) => {
-  const camera = req.body;
-  if (!camera || !camera.ip) {
-    return res.status(400).json({ success: false, message: 'IP is required' });
+app.get('/api/cameras/:id', (req, res) => {
+  const camera = cameraStore.getById(req.params.id);
+  if (!camera) {
+    return res.status(404).json({ success: false, message: 'Camera not found' });
   }
-  log('info', 'Adding camera:', sanitizeCamera(camera));
-  const result = cameraStore.add(camera);
-  res.status(result.success ? 201 : 409).json(result);
+  // Strip sensitive fields
+  const { password, rtspUrl, httpUrl, onvif, httpCgi, ...safe } = camera;
+  res.json(safe);
+});
+
+app.post('/api/cameras', (req, res) => {
+  try {
+    const camera = req.body;
+    if (!camera || !camera.ip) {
+      return res.status(400).json({ success: false, message: 'IP is required' });
+    }
+    log('info', 'Adding camera:', sanitizeCamera(camera));
+    const result = cameraStore.add(camera);
+    res.status(result.success ? 201 : 409).json(result);
+  } catch (err) {
+    log('error', `POST /api/cameras failed: ${err.message}`);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 app.delete('/api/cameras/:id', (req, res) => {
@@ -85,8 +100,10 @@ app.post('/api/streams/start', async (req, res) => {
     return res.status(404).json({ success: false, message: `Camera ${cameraId} not found in store` });
   }
 
-  // CloseLi cameras: use live TCP stream (port 12345) by default
-  if (camera.brand === 'CloseLi' && camera.ip && mode !== 'recording') {
+  // CloseLi cameras:
+  //   TCP port 12345 = real-time 640x360 (fast, reliable) — default for dashboard
+  //   HTTP recording  = 1600x960 (slow startup, better quality) — used when mode='hd'
+  if (camera.brand === 'CloseLi' && camera.ip && mode !== 'hd' && mode !== 'recording') {
     const liveChannel = camera.liveChannel != null ? camera.liveChannel : 0;
     log('info', `[${cameraId}] Starting CloseLi LIVE stream from ${camera.ip}:12345 channel=${liveChannel}`);
     const result = streamManager.startLive(cameraId, camera.ip, 12345, liveChannel);

@@ -55,29 +55,39 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
   const args = [];
 
   if (isHttpSource(inputUrl)) {
-    // HTTP raw stream (e.g. CloseLi cameras)
+    // HTTP raw stream (e.g. CloseLi cameras recording files)
     // -re reads at native framerate so a 60s segment plays for 60s (not 2s)
     args.push(
       '-re',
       '-reconnect', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5',
+      '-probesize', '5000000',
+      '-analyzeduration', '5000000',
+      '-f', 'h264',
       '-i', inputUrl,
       '-an',
     );
-    // HTTP raw streams almost always need transcoding
-    args.push(
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-tune', 'zerolatency',
-      '-profile:v', 'baseline',
-      '-b:v', '1500k',
-      '-maxrate', '1500k',
-      '-bufsize', '3000k',
-      '-g', '16',
-      '-keyint_min', '16',
-      '-force_key_frames', 'expr:gte(t,n_forced*2)',
-    );
+    if (transcode) {
+      args.push(
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v', 'baseline',
+        '-b:v', '4000k',
+        '-maxrate', '4000k',
+        '-bufsize', '8000k',
+        '-g', '16',
+        '-keyint_min', '16',
+        '-force_key_frames', 'expr:gte(t,n_forced*2)',
+      );
+    } else {
+      // Try codec copy first (preserves full 1600x960 quality)
+      args.push(
+        '-c:v', 'copy',
+        '-bsf:v', 'dump_extra',
+      );
+    }
   } else {
     // RTSP stream
     args.push(
@@ -221,13 +231,14 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
       return;
     }
 
-    // If copy mode failed with known codec errors, retry with transcode (RTSP only)
-    if (!transcode && code !== 0 && stream.sourceType !== 'http') {
-      const shouldRetry = COPY_FAIL_PATTERNS.some((p) =>
+    // If copy mode failed, retry with transcode
+    if (!transcode && code !== 0) {
+      const isHttp = isHttpSource(inputUrl);
+      const shouldRetry = isHttp || COPY_FAIL_PATTERNS.some((p) =>
         stream.stderrBuffer.toLowerCase().includes(p.toLowerCase())
       );
       if (shouldRetry) {
-        log('info', `[${cameraId}] Copy mode failed, retrying with transcode...`);
+        log('info', `[${cameraId}] Copy mode failed (${isHttp ? 'HTTP' : 'RTSP'}), retrying with transcode...`);
         activeStreams.delete(cameraId);
         const retryStream = spawnFfmpeg(cameraId, inputUrl, true);
         activeStreams.set(cameraId, retryStream);

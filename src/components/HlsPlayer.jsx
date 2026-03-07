@@ -74,8 +74,10 @@ export default function HlsPlayer({ hlsUrl, autoplay = true, muted = true }) {
   return (
     <video
       ref={videoRef}
+      autoPlay={autoplay}
       muted={muted}
       playsInline
+      webkit-playsinline=""
       className="w-full h-full object-contain bg-black"
       style={{ minHeight: 0 }}
     />

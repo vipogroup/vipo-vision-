@@ -19,6 +19,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['vite.svg', 'pwa-icon.svg'],
+      devOptions: { enabled: true },
       manifest: {
         name: 'VIPO Vision — Surveillance Platform',
         short_name: 'VIPO Vision',

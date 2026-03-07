@@ -243,11 +243,13 @@ export const cameraDiscoveryService = {
     return this.removeCamera(cameraId);
   },
 
-  async apiStartStream(cameraId) {
+  async apiStartStream(cameraId, mode) {
+    const body = { cameraId };
+    if (mode) body.mode = mode;
     const res = await fetch(`${GATEWAY_BASE}/api/streams/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cameraId }),
+      body: JSON.stringify(body),
     });
     return res.json();
   },

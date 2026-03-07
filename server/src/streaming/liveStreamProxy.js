@@ -36,6 +36,7 @@ function getSharedConnection(cameraIp, streamPort) {
     key,
     socket: null,
     consumers: new Map(), // field3 → Set of callback(nalBuffer)
+    earlyBuffers: new Map(), // field3 → Buffer[] (early data for late consumers)
     refCount: 1,
     status: 'connecting',
   };
@@ -45,6 +46,8 @@ function getSharedConnection(cameraIp, streamPort) {
 
   // Accumulation buffer for protocol parsing
   let accum = Buffer.alloc(0);
+  const seenField3 = new Map(); // field3 → frameCount (diagnostic)
+  let lastDiagAt = 0;
 
   socket.setTimeout(60000);
 
@@ -94,6 +97,29 @@ function getSharedConnection(cameraIp, streamPort) {
       const h264Data = accum.slice(hdrPos + 16, nextHdrPos);
 
       if (h264Data.length > 0 && field3 >= 0 && field3 < 100) {
+        // Diagnostic: track all field3 values seen
+        seenField3.set(field3, (seenField3.get(field3) || 0) + 1);
+        const now = Date.now();
+        if (now - lastDiagAt > 10000) {
+          lastDiagAt = now;
+          const summary = [...seenField3.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([f3, cnt]) => `f3=${f3}(ch${Math.floor(f3/3)}q${f3%3}):${cnt}`)
+            .join(', ');
+          log('info', `[shared-${key}] field3 seen: ${summary}`);
+        }
+
+        // Buffer early data for channels that don't have consumers yet
+        // so late-registering consumers can replay SPS/PPS
+        if (!conn.consumers.has(field3) || conn.consumers.get(field3).size === 0) {
+          if (!conn.earlyBuffers.has(field3)) conn.earlyBuffers.set(field3, []);
+          const buf = conn.earlyBuffers.get(field3);
+          const totalSize = buf.reduce((s, b) => s + b.length, 0);
+          if (totalSize < 512 * 1024) { // keep up to 512KB per channel
+            buf.push(Buffer.from(h264Data));
+          }
+        }
+
         const callbacks = conn.consumers.get(field3);
         if (callbacks && callbacks.size > 0) {
           for (const cb of callbacks) {
@@ -121,7 +147,10 @@ function getSharedConnection(cameraIp, streamPort) {
   socket.on('close', () => {
     log('info', `[shared-${key}] Socket closed`);
     conn.status = 'closed';
-    sharedConnections.delete(key);
+    // Only remove from map if this is still the current connection (race-condition guard)
+    if (sharedConnections.get(key) === conn) {
+      sharedConnections.delete(key);
+    }
   });
 
   socket.connect(streamPort, cameraIp);
@@ -155,9 +184,12 @@ function releaseSharedConnection(conn, field3, callback) {
  * @param {string} opts.streamId - Unique stream identifier
  * @param {number} opts.fps - Expected framerate (default 25)
  */
-// CloseLi protocol field3 → channel mapping (discovered by analysis)
-// Main-quality 1600x960 streams use field3: 0, 3, 6, 7
-const CHANNEL_TO_FIELD3 = [0, 3, 6, 7];
+// CloseLi protocol field3 → channel mapping
+// channel = floor(field3/3), quality = field3%3 (0=main, 1=sub, 2=thumb)
+// Main-quality streams: ch0→0, ch1→3, ch2→6, ch3→9
+// Note: ch3 may only send thumbnail (f3=11) if no camera is connected
+const CHANNEL_TO_FIELD3 = [0, 3, 6, 9];
+const CHANNEL_FALLBACKS = { 0: [1, 2], 3: [4, 5], 6: [7, 8], 9: [10, 11] };
 
 export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hlsOutputDir, streamId, fps = 25 }) {
   const mainField3 = CHANNEL_TO_FIELD3[channel] ?? (channel * 3); // use lookup, fallback to channel*3
@@ -183,6 +215,8 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       '-y',
       '-fflags', '+genpts+discardcorrupt',
       '-use_wallclock_as_timestamps', '1',
+      '-probesize', '5000000',
+      '-analyzeduration', '5000000',
       '-f', 'h264',
       '-i', 'pipe:0',
       '-c:v', 'copy',
@@ -252,10 +286,17 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
         spsBuffer = spsBuffer.slice(spsBuffer.length - 1024 * 1024);
       }
 
+      // Find NAL start codes: both 00 00 00 01 (4-byte) and 00 00 01 (3-byte)
       const starts = [];
-      for (let i = 0; i <= spsBuffer.length - 4; i++) {
-        if (spsBuffer[i] === 0 && spsBuffer[i + 1] === 0 && spsBuffer[i + 2] === 0 && spsBuffer[i + 3] === 1) {
-          starts.push(i);
+      for (let i = 0; i <= spsBuffer.length - 3; i++) {
+        if (spsBuffer[i] === 0 && spsBuffer[i + 1] === 0) {
+          if (i + 3 < spsBuffer.length && spsBuffer[i + 2] === 0 && spsBuffer[i + 3] === 1) {
+            starts.push({ pos: i, len: 4 }); // 4-byte start code
+            i += 3;
+          } else if (spsBuffer[i + 2] === 1) {
+            starts.push({ pos: i, len: 3 }); // 3-byte start code
+            i += 2;
+          }
         }
       }
 
@@ -265,10 +306,11 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       }
 
       for (let s = 0; s < starts.length - 1; s++) {
-        const start = starts[s];
-        const end = starts[s + 1];
-        if (start + 4 >= spsBuffer.length) continue;
-        const nalType = spsBuffer[start + 4] & 0x1f;
+        const start = starts[s].pos;
+        const nalOffset = start + starts[s].len;
+        const end = starts[s + 1].pos;
+        if (nalOffset >= spsBuffer.length) continue;
+        const nalType = spsBuffer[nalOffset] & 0x1f;
 
         if (nalType === NAL_TYPE_SPS) {
           lastSpsNal = spsBuffer.slice(start, end);
@@ -276,7 +318,7 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
           lastPpsNal = spsBuffer.slice(start, end);
         } else if (nalType === 5 && lastSpsNal && lastPpsNal) {
           foundSps = true;
-          log('info', `[${streamId}] Found SPS/PPS/IDR for channel ${channel} (field3=${mainField3})`);
+          log('info', `[${streamId}] Found SPS/PPS/IDR for channel ${channel} (field3=${currentField3})`);
           state.ffmpeg = startFfmpeg();
           if (state.ffmpeg && state.ffmpeg.stdin.writable) {
             state.ffmpeg.stdin.write(lastSpsNal);
@@ -304,12 +346,55 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
   // Get or create shared connection
   const conn = getSharedConnection(cameraIp, streamPort);
 
-  // Register our consumer for the main-quality field3 of our channel
-  if (!conn.consumers.has(mainField3)) {
-    conn.consumers.set(mainField3, new Set());
+  let currentField3 = mainField3;
+
+  function registerConsumer(f3) {
+    if (!conn.consumers.has(f3)) {
+      conn.consumers.set(f3, new Set());
+    }
+    conn.consumers.get(f3).add(onNalData);
+    currentField3 = f3;
+
+    // Replay early buffered data (contains SPS/PPS from connection start)
+    const earlyBuf = conn.earlyBuffers.get(f3);
+    if (earlyBuf && earlyBuf.length > 0) {
+      const totalBytes = earlyBuf.reduce((s, b) => s + b.length, 0);
+      log('info', `[${streamId}] Replaying ${earlyBuf.length} early packets (${totalBytes} bytes) for field3=${f3}`);
+      for (const chunk of earlyBuf) {
+        onNalData(chunk);
+      }
+      conn.earlyBuffers.delete(f3); // clear after replay
+    }
+
+    log('info', `[${streamId}] Registered for channel ${channel} (field3=${f3}) on shared connection`);
   }
-  conn.consumers.get(mainField3).add(onNalData);
-  log('info', `[${streamId}] Registered for channel ${channel} (field3=${mainField3}) on shared connection`);
+
+  registerConsumer(mainField3);
+
+  // Fallback: if no SPS found within 15s, try sub/thumbnail quality
+  const fallbacks = CHANNEL_FALLBACKS[mainField3];
+  let fallbackTimer = null;
+  if (fallbacks && fallbacks.length > 0) {
+    let fbIdx = 0;
+    fallbackTimer = setInterval(() => {
+      if (foundSps || state.status === 'stopped' || fbIdx >= fallbacks.length) {
+        clearInterval(fallbackTimer);
+        return;
+      }
+      log('info', `[${streamId}] No SPS on field3=${currentField3} after timeout, trying fallback field3=${fallbacks[fbIdx]}`);
+      // Unregister current
+      const cbs = conn.consumers.get(currentField3);
+      if (cbs) { cbs.delete(onNalData); if (cbs.size === 0) conn.consumers.delete(currentField3); }
+      // Reset SPS search
+      foundSps = false;
+      spsBuffer = Buffer.alloc(0);
+      lastSpsNal = null;
+      lastPpsNal = null;
+      // Register for fallback
+      registerConsumer(fallbacks[fbIdx]);
+      fbIdx++;
+    }, 5000);
+  }
 
   return {
     get status() { return state.status; },
@@ -319,7 +404,8 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
 
     stop() {
       state.status = 'stopped';
-      releaseSharedConnection(conn, mainField3, onNalData);
+      if (fallbackTimer) clearInterval(fallbackTimer);
+      releaseSharedConnection(conn, currentField3, onNalData);
       if (state.ffmpeg) {
         state.ffmpeg.stdin.end();
         state.ffmpeg.kill('SIGTERM');
