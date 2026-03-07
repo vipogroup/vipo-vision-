@@ -47,7 +47,8 @@ import { useTelemetry } from '../hooks/useTelemetry';
 import { ptzUtils } from '../services/ptzService';
 import { cameraDiscoveryService } from '../services/cameraDiscoveryService';
 import { GATEWAY_BASE } from '../config';
-import { useCameraStore } from '../stores/cameraStore';
+import { cameraStore, useCameraStore } from '../stores/cameraStore';
+import PTZMiniPanel from '../components/PTZMiniPanel';
 
 function DPadButton({ direction, icon, disabled, activeDirection, onStart, onStop, nearEdge }) {
   const IconComponent = icon;
@@ -104,6 +105,9 @@ export default function CameraPlayerPage() {
   const [mirrored, setMirrored] = useState(() => {
     try { return localStorage.getItem(`cam-mir-${id}`) === '1'; } catch { return false; }
   });
+  const [showPtzOverlay, setShowPtzOverlay] = useState(false);
+  const [enablePtzLoading, setEnablePtzLoading] = useState(false);
+  const [enablePtzError, setEnablePtzError] = useState(null);
   const cycleRotation = () => {
     const next = (rotation + 90) % 360;
     setRotation(next);
@@ -123,6 +127,29 @@ export default function CameraPlayerPage() {
 
   const ptz = usePTZ(id, camera);
   const telemetry = useTelemetry(id);
+
+  const handleEnableCloseLiPtz = useCallback(async () => {
+    if (!camera) return;
+    setEnablePtzError(null);
+    setEnablePtzLoading(true);
+    try {
+      const port = camera.port || 8080;
+      await cameraStore.updateCamera(camera.id, {
+        ptzSupported: true,
+        zoomSupported: true,
+        ptzType: 'http_cgi',
+        httpCgi: { templateName: 'hi3510', baseUrl: `http://${camera.ip}:${port}` },
+        movementSpeed: camera.movementSpeed || 5,
+        maxZoom: camera.maxZoom || 5,
+        panRange: Array.isArray(camera.panRange) && camera.panRange.length === 2 ? camera.panRange : [-180, 180],
+        tiltRange: Array.isArray(camera.tiltRange) && camera.tiltRange.length === 2 ? camera.tiltRange : [-90, 45],
+      });
+    } catch (err) {
+      setEnablePtzError(err?.message || 'Failed to enable PTZ');
+    } finally {
+      setEnablePtzLoading(false);
+    }
+  }, [camera]);
 
   const handleStartStream = useCallback(async () => {
     setStreamState('starting');
@@ -354,6 +381,14 @@ export default function CameraPlayerPage() {
                       )}
                     </div>
                   </div>
+
+                  {camera.ptzSupported && showPtzOverlay && (
+                    <PTZMiniPanel
+                      camera={camera}
+                      onClose={() => setShowPtzOverlay(false)}
+                      style={{ right: 12, bottom: 88 }}
+                    />
+                  )}
                 </>
               )}
 
@@ -402,6 +437,19 @@ export default function CameraPlayerPage() {
                     >
                       <FlipHorizontal2 className="w-4 h-4" />
                     </button>
+                    {camera.ptzSupported && (
+                      <button
+                        onClick={() => setShowPtzOverlay((v) => !v)}
+                        className={`p-2 rounded-lg transition-colors ${
+                          showPtzOverlay
+                            ? 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30'
+                            : 'bg-slate-800/60 text-slate-300 hover:text-cyan-400 hover:bg-slate-700/60'
+                        }`}
+                        title={showPtzOverlay ? 'Hide PTZ' : 'Show PTZ'}
+                      >
+                        <Move className="w-4 h-4" />
+                      </button>
+                    )}
                     <div className="w-px h-5 bg-slate-700/50" />
                     {streamState === 'running' ? (
                       <button
@@ -566,6 +614,20 @@ export default function CameraPlayerPage() {
                   <div className="text-center py-4">
                     <Move className="w-8 h-8 text-slate-700 mx-auto mb-2" />
                     <p className="text-xs text-slate-500">PTZ not available for this camera</p>
+                    {camera.brand === 'CloseLi' && (
+                      <div className="mt-3">
+                        <button
+                          onClick={handleEnableCloseLiPtz}
+                          disabled={enablePtzLoading}
+                          className="px-3 py-2 rounded-lg text-xs font-medium bg-cyan-500/15 text-cyan-400 border border-cyan-500/25 hover:bg-cyan-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {enablePtzLoading ? 'Enabling PTZ...' : 'Enable PTZ Control'}
+                        </button>
+                        {enablePtzError && (
+                          <div className="mt-2 text-[10px] text-red-400">{enablePtzError}</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">

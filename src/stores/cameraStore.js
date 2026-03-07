@@ -84,6 +84,12 @@ export const cameraStore = {
     await cameraStore.loadCameras();
     return result;
   },
+
+  async updateCamera(cameraId, patch) {
+    const result = await cameraService.updateCamera(cameraId, patch);
+    await cameraStore.loadCameras();
+    return result;
+  },
 };
 
 export function useCameraStore() {

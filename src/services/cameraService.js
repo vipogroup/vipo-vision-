@@ -35,4 +35,11 @@ export const cameraService = {
       method: 'DELETE',
     });
   },
+
+  async updateCamera(cameraId, patch) {
+    return requestJson(`/api/cameras/${encodeURIComponent(cameraId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch || {}),
+    });
+  },
 };

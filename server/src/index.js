@@ -89,6 +89,51 @@ app.post('/api/cameras', (req, res) => {
   }
 });
 
+app.patch('/api/cameras/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = cameraStore.getById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Camera not found' });
+    }
+
+    const patch = req.body || {};
+    const allowed = {
+      name: patch.name,
+      location: patch.location,
+      group: patch.group,
+      ptzSupported: patch.ptzSupported,
+      zoomSupported: patch.zoomSupported,
+      movementSpeed: patch.movementSpeed,
+      maxZoom: patch.maxZoom,
+      panRange: patch.panRange,
+      tiltRange: patch.tiltRange,
+      ptzType: patch.ptzType,
+      httpCgi: patch.httpCgi,
+      onvif: patch.onvif,
+      liveChannel: patch.liveChannel,
+    };
+
+    Object.keys(allowed).forEach((k) => {
+      if (allowed[k] === undefined) delete allowed[k];
+    });
+
+    if (allowed.ptzType && !['none', 'onvif', 'http_cgi'].includes(allowed.ptzType)) {
+      return res.status(400).json({ success: false, message: 'Invalid ptzType' });
+    }
+
+    if (allowed.httpCgi && typeof allowed.httpCgi !== 'object') {
+      return res.status(400).json({ success: false, message: 'Invalid httpCgi' });
+    }
+
+    const result = cameraStore.update(id, allowed);
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    log('error', `PATCH /api/cameras failed: ${err.message}`);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.delete('/api/cameras/:id', (req, res) => {
   const { id } = req.params;
   // Stop any active stream first
@@ -520,12 +565,17 @@ app.post('/api/discovery/auto', async (req, res) => {
                 codec: 'H.264',
                 location: `CloseLi Camera — Channel ${i + 1}`,
                 group: 'CloseLi',
-                ptzSupported: false,
-                zoomSupported: false,
+                ptzSupported: true,
+                zoomSupported: true,
                 onvifSupported: false,
                 brand: 'CloseLi',
                 model: 'Ingenic T23 + GC2083',
-                ptzType: 'none',
+                ptzType: 'http_cgi',
+                httpCgi: { templateName: 'hi3510', baseUrl: `http://${dev.ip}:8080` },
+                movementSpeed: 5,
+                maxZoom: 5,
+                panRange: [-180, 180],
+                tiltRange: [-90, 45],
               });
               if (addResult.success) results.added.push(addResult.camera);
             }

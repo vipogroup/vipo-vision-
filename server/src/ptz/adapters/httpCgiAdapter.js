@@ -11,6 +11,48 @@ import { log } from '../../sanitize.js';
 // ─── Built-in CGI templates ─────────────────────────────────────────
 
 const TEMPLATES = {
+  hi3510: {
+    name: 'Hi3510 (PTZ CGI)',
+    move(baseUrl, direction, speed) {
+      const act = { up: 'up', down: 'down', left: 'left', right: 'right' }[direction] || 'stop';
+      const spd = Math.max(1, Math.min(10, Math.round(speed || 5)));
+      return {
+        url: `${baseUrl}/cgi-bin/hi3510/ptzctrl.cgi?-step=0&-act=${act}&-speed=${spd}`,
+        method: 'GET',
+      };
+    },
+    stop(baseUrl) {
+      return {
+        url: `${baseUrl}/cgi-bin/hi3510/ptzctrl.cgi?-step=0&-act=stop`,
+        method: 'GET',
+      };
+    },
+    zoom(baseUrl, mode) {
+      const act = mode === 'in' ? 'zoomin' : mode === 'out' ? 'zoomout' : 'stop';
+      return {
+        url: `${baseUrl}/cgi-bin/hi3510/ptzctrl.cgi?-step=0&-act=${act}`,
+        method: 'GET',
+      };
+    },
+    presets() {
+      return null;
+    },
+    gotoPreset(baseUrl, presetId) {
+      const id = presetId || '0';
+      return {
+        url: `${baseUrl}/cgi-bin/hi3510/preset.cgi?-act=goto&-number=${encodeURIComponent(id)}`,
+        method: 'GET',
+      };
+    },
+    savePreset(baseUrl, name, presetId) {
+      const id = presetId || '0';
+      return {
+        url: `${baseUrl}/cgi-bin/hi3510/preset.cgi?-act=set&-number=${encodeURIComponent(id)}`,
+        method: 'GET',
+      };
+    },
+  },
+
   hikvision: {
     name: 'Hikvision (ISAPI)',
     move(baseUrl, direction, speed) {
@@ -184,6 +226,7 @@ export const httpCgiAdapter = {
     if (!tpl) return [];
     try {
       const spec = tpl.presets(getBaseUrl(camera));
+      if (!spec) return [];
       await doRequest(spec, getAuth(camera));
       // Parsing vendor-specific preset XML is complex — return empty for now
       // Real implementation would parse the response per vendor
