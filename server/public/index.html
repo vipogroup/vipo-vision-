@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>HLS Test</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <style>
+    body { background: #111; color: #fff; font-family: sans-serif; margin: 20px; }
+    video { width: 640px; height: 360px; background: #000; border: 2px solid #333; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 1300px; }
+    .cam { text-align: center; }
+    #log { background: #222; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto; font-size: 12px; font-family: monospace; white-space: pre-wrap; }
+    button { background: #0ea5e9; color: white; border: none; padding: 8px 16px; margin: 5px; cursor: pointer; border-radius: 4px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h2>VIPO Vision — HLS Stream Test (same-origin)</h2>
+  <p>Click the button below to start all 4 cameras. Video should appear within 15-20 seconds.</p>
+  <button onclick="startAll()" style="font-size:20px;padding:12px 24px;">▶ Start All 4 Cameras</button>
+  <div class="grid">
+    <div class="cam">
+      <h3>cam-001</h3>
+      <video id="v1" muted playsinline controls></video>
+    </div>
+    <div class="cam">
+      <h3>cam-002</h3>
+      <video id="v2" muted playsinline controls></video>
+    </div>
+    <div class="cam">
+      <h3>cam-003</h3>
+      <video id="v3" muted playsinline controls></video>
+    </div>
+    <div class="cam">
+      <h3>cam-004</h3>
+      <video id="v4" muted playsinline controls></video>
+    </div>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    const log = (msg) => {
+      const d = document.getElementById('log');
+      d.textContent += new Date().toLocaleTimeString() + ' ' + msg + '\n';
+      d.scrollTop = d.scrollHeight;
+      console.log(msg);
+    };
+
+    async function startOne(camId) {
+      log(`Starting ${camId}...`);
+      try {
+        const res = await fetch('/api/streams/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cameraId: camId }),
+        });
+        const data = await res.json();
+        log(`API response: ${JSON.stringify(data)}`);
+        const url = data.hlsUrl || (data.stream && data.stream.hlsUrl);
+        if (!url) { log(`No HLS URL for ${camId}`); return; }
+        log(`HLS URL: ${url}`);
+
+        // Wait for m3u8 to be ready
+        for (let i = 0; i < 20; i++) {
+          const check = await fetch(url, { method: 'HEAD' });
+          if (check.ok) { log(`m3u8 ready for ${camId}`); break; }
+          log(`Waiting for m3u8... (${i+1})`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+
+        const idx = { 'cam-001': 'v1', 'cam-002': 'v2', 'cam-003': 'v3', 'cam-004': 'v4' };
+        const video = document.getElementById(idx[camId]);
+        
+        if (Hls.isSupported()) {
+          const hls = new Hls({ debug: false });
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            log(`[${camId}] Manifest parsed, playing...`);
+            video.play().catch(e => log(`[${camId}] Play error: ${e.message}`));
+          });
+          hls.on(Hls.Events.ERROR, (_, d) => {
+            log(`[${camId}] HLS error: ${d.type} ${d.details} fatal:${d.fatal}`);
+            if (d.fatal) {
+              if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                setTimeout(() => hls.startLoad(), 3000);
+              } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                hls.recoverMediaError();
+              }
+            }
+          });
+          hls.on(Hls.Events.FRAG_LOADED, () => {
+            log(`[${camId}] Fragment loaded`);
+          });
+        } else {
+          log('HLS not supported, trying native');
+          video.src = url;
+          video.play();
+        }
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    function startAll() {
+      startOne('cam-001');
+      setTimeout(() => startOne('cam-002'), 2000);
+      setTimeout(() => startOne('cam-003'), 4000);
+      setTimeout(() => startOne('cam-004'), 6000);
+    }
+
+    // Auto-start on page load
+    window.addEventListener('load', () => {
+      log('Page loaded, auto-starting all cameras...');
+      startAll();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+export const events = [
+  {
+    id: 'evt-001',
+    type: 'recording',
+    cameraId: 'cam-001',
+    cameraName: 'CloseLi CH1',
+    message: 'Recording active — SD card storage',
+    timestamp: '2026-03-06T00:01:00',
+    severity: 'info',
+    acknowledged: true,
+  },
+  {
+    id: 'evt-002',
+    type: 'recording',
+    cameraId: 'cam-002',
+    cameraName: 'CloseLi CH2',
+    message: 'Recording active — SD card storage',
+    timestamp: '2026-03-06T00:01:00',
+    severity: 'info',
+    acknowledged: true,
+  },
+  {
+    id: 'evt-003',
+    type: 'recording',
+    cameraId: 'cam-003',
+    cameraName: 'CloseLi CH3',
+    message: 'Recording active — SD card storage',
+    timestamp: '2026-03-06T00:01:00',
+    severity: 'info',
+    acknowledged: true,
+  },
+  {
+    id: 'evt-004',
+    type: 'recording',
+    cameraId: 'cam-004',
+    cameraName: 'CloseLi CH4',
+    message: 'Recording active — SD card storage',
+    timestamp: '2026-03-06T00:01:00',
+    severity: 'info',
+    acknowledged: true,
+  },
+  {
+    id: 'evt-005',
+    type: 'motion',
+    cameraId: 'cam-001',
+    cameraName: 'CloseLi CH1',
+    message: 'Motion detected — Channel 1',
+    timestamp: '2026-03-05T23:42:00',
+    severity: 'info',
+    acknowledged: false,
+  },
+  {
+    id: 'evt-006',
+    type: 'motion',
+    cameraId: 'cam-003',
+    cameraName: 'CloseLi CH3',
+    message: 'Motion detected — Channel 3',
+    timestamp: '2026-03-05T23:38:00',
+    severity: 'warning',
+    acknowledged: false,
+  },
+];
+
+export const eventTypes = ['all', 'motion', 'offline', 'recording', 'human'];
+
+export const severityLevels = ['info', 'warning', 'critical'];

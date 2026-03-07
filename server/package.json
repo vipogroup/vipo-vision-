@@ -1,0 +1,19 @@
+{
+  "name": "vipo-vision-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "onvif": "^0.8.1",
+    "ws": "^8.19.0",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
