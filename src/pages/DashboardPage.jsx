@@ -17,6 +17,7 @@ const gridOptions = [
 export default function DashboardPage() {
   const { t } = useLanguage();
   const [gridSize, setGridSize] = useState(4);
+  const [streamMode, setStreamMode] = useState('hd'); // 'hd' or 'live'
   const { cameras } = useCameraStore();
 
   const onlineCount = cameras.filter((c) => c.status === 'online' || c.status === 'motion').length;
@@ -45,14 +46,38 @@ export default function DashboardPage() {
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 md:gap-4 text-[10px] md:text-xs text-slate-400">
-            <span className="text-emerald-400">{onlineCount} online</span>
-            <span className="text-blue-400">{recordingCount} rec</span>
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="flex items-center gap-1 bg-slate-800/50 rounded-lg p-0.5">
+              <button
+                onClick={() => setStreamMode('hd')}
+                className={`px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-medium transition-all ${
+                  streamMode === 'hd'
+                    ? 'bg-cyan-500 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                HD
+              </button>
+              <button
+                onClick={() => setStreamMode('live')}
+                className={`px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-medium transition-all ${
+                  streamMode === 'live'
+                    ? 'bg-cyan-500 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                LIVE
+              </button>
+            </div>
+            <div className="hidden sm:flex items-center gap-3 md:gap-4 text-[10px] md:text-xs text-slate-400">
+              <span className="text-emerald-400">{onlineCount} online</span>
+              <span className="text-blue-400">{recordingCount} rec</span>
+            </div>
           </div>
         </div>
 
         <div className="flex-1 min-h-0 animate-fade-in">
-          <CameraGrid cameras={cameras} gridSize={gridSize} />
+          <CameraGrid cameras={cameras} gridSize={gridSize} streamMode={streamMode} />
         </div>
 
         <div className="hidden grid-cols-1 lg:grid-cols-3 gap-4">

@@ -8,7 +8,7 @@ import HlsPlayer from './HlsPlayer';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { GATEWAY_BASE } from '../config';
 
-export default function CameraCard({ camera, compact = false, fillHeight = false }) {
+export default function CameraCard({ camera, compact = false, fillHeight = false, streamMode = 'hd' }) {
   const navigate = useNavigate();
   const telemetry = useTelemetry(camera.id);
   const [showMiniPTZ, setShowMiniPTZ] = useState(false);
@@ -49,8 +49,8 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
       setStreamLoading(true);
 
       // Step 1: tell backend to start the stream
-      // Use 'recording' mode for CloseLi cameras to get HD (1600x960) instead of SD TCP live
-      const mode = camera.brand === 'CloseLi' ? 'recording' : 'live';
+      // Use streamMode from Dashboard toggle: 'hd' = recording (1600x960), 'live' = TCP (640x360)
+      const mode = streamMode === 'hd' ? 'recording' : 'live';
       let hlsPath = null;
       for (let retry = 0; retry < 3 && !cancelled; retry++) {
         try {
@@ -84,7 +84,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
     };
     startStream();
     return () => { cancelled = true; };
-  }, [camera.id, camera.status]);
+  }, [camera.id, camera.status, streamMode]);
 
   const isLive = !!hlsUrl;
 
@@ -159,6 +159,19 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
               <div className="flex items-center gap-0.5 sm:gap-1 bg-cyan-500/10 backdrop-blur-sm border border-cyan-500/20 px-1 sm:px-1.5 py-0.5 rounded-full">
                 <Move className="w-2 sm:w-2.5 h-2 sm:h-2.5 text-cyan-400" />
                 <span className="text-[8px] sm:text-[9px] font-semibold text-cyan-400">PTZ</span>
+              </div>
+            )}
+            {!compact && (
+              <div className={`flex items-center gap-0.5 sm:gap-1 backdrop-blur-sm border px-1 sm:px-1.5 py-0.5 rounded-full ${
+                streamMode === 'hd' 
+                  ? 'bg-purple-500/10 border-purple-500/20' 
+                  : 'bg-orange-500/10 border-orange-500/20'
+              }`}>
+                <span className={`text-[8px] sm:text-[9px] font-semibold ${
+                  streamMode === 'hd' ? 'text-purple-400' : 'text-orange-400'
+                }`}>
+                  {streamMode === 'hd' ? 'HD' : 'LIVE'}
+                </span>
               </div>
             )}
           </div>
