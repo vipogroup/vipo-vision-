@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIPO Vision — מערכת ניהול מצלמות חכמה</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Heebo', sans-serif;
+      background: #0a0a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated background */
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      z-index: 0;
+    }
+
+    .bg-glow {
+      position: fixed;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.15;
+      z-index: 0;
+    }
+    .bg-glow-1 { background: #6366f1; top: -200px; right: -100px; }
+    .bg-glow-2 { background: #06b6d4; bottom: -200px; left: -100px; }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      padding: 24px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 1.6rem;
+      font-weight: 900;
+      background: linear-gradient(135deg, #6366f1, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+
+    .github-link {
+      color: #a0a0b0;
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: color 0.2s;
+    }
+    .github-link:hover { color: #fff; }
+    .github-link svg { width: 20px; height: 20px; fill: currentColor; }
+
+    /* Hero */
+    .hero {
+      text-align: center;
+      padding: 80px 0 60px;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.5rem);
+      font-weight: 900;
+      line-height: 1.2;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      font-size: 1.15rem;
+      color: #9ca3af;
+      max-width: 600px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    .badge-row {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 40px;
+    }
+
+    .badge {
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      padding: 6px 16px;
+      border-radius: 100px;
+      font-size: 0.8rem;
+      color: #a5b4fc;
+    }
+
+    /* Install Section */
+    .install-section {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 20px;
+      padding: 48px;
+      margin-bottom: 60px;
+    }
+
+    .install-section h2 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    .install-section .subtitle {
+      text-align: center;
+      color: #9ca3af;
+      margin-bottom: 32px;
+    }
+
+    .install-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+
+    .install-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 32px;
+      text-align: center;
+      transition: all 0.3s;
+      cursor: default;
+    }
+    .install-card:hover {
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 40px rgba(99, 102, 241, 0.1);
+    }
+
+    .install-card .icon {
+      font-size: 2.5rem;
+      margin-bottom: 16px;
+    }
+
+    .install-card h3 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+
+    .install-card p {
+      font-size: 0.9rem;
+      color: #9ca3af;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 28px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s;
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 6px 30px rgba(99, 102, 241, 0.5);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: #e0e0e0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+    }
+    .btn-success:hover {
+      box-shadow: 0 6px 30px rgba(16, 185, 129, 0.5);
+      transform: translateY(-1px);
+    }
+
+    /* Command box */
+    .cmd-box {
+      background: #111827;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.85rem;
+      color: #10b981;
+      direction: ltr;
+      text-align: left;
+      overflow-x: auto;
+      position: relative;
+      margin: 16px 0;
+    }
+
+    .cmd-box .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #9ca3af;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: 'Heebo', sans-serif;
+      transition: all 0.2s;
+    }
+    .cmd-box .copy-btn:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
+    .cmd-box .copy-btn.copied { color: #10b981; }
+
+    /* Features */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      margin-bottom: 60px;
+    }
+
+    .feature {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      padding: 28px;
+      transition: all 0.3s;
+    }
+    .feature:hover {
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .feature .icon { font-size: 1.8rem; margin-bottom: 12px; }
+    .feature h3 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #fff; }
+    .feature p { font-size: 0.85rem; color: #9ca3af; line-height: 1.6; }
+
+    /* Requirements */
+    .requirements {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 20px;
+      padding: 40px 48px;
+      margin-bottom: 60px;
+    }
+
+    .requirements h2 {
+      font-size: 1.5rem;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .req-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .req-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+    }
+
+    .req-item .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .req-item .dot.required { background: #10b981; }
+    .req-item .dot.optional { background: #f59e0b; }
+
+    .req-item .info { font-size: 0.9rem; }
+    .req-item .info strong { color: #fff; display: block; }
+    .req-item .info span { color: #9ca3af; font-size: 0.8rem; }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 40px 0;
+      color: #6b7280;
+      font-size: 0.85rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: #1a1a2e;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal h2 { font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+    .modal p { color: #9ca3af; margin-bottom: 16px; line-height: 1.6; }
+    .modal .close-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #e0e0e0;
+      padding: 10px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.9rem;
+      margin-top: 16px;
+    }
+
+    .steps { list-style: none; counter-reset: step; }
+    .steps li {
+      counter-increment: step;
+      padding: 12px 0;
+      padding-right: 40px;
+      position: relative;
+      color: #d1d5db;
+      font-size: 0.95rem;
+    }
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      right: 0;
+      width: 28px;
+      height: 28px;
+      background: rgba(99, 102, 241, 0.2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #a5b4fc;
+    }
+
+    @media (max-width: 640px) {
+      .install-section { padding: 28px 20px; }
+      .requirements { padding: 28px 20px; }
+      .modal { padding: 28px 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="logo">🎬 VIPO Vision</div>
+      <a href="https://github.com/vipogroup/vipo-vision-" target="_blank" class="github-link">
+        <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="badge-row">
+        <span class="badge">🚀 GPU Accelerated</span>
+        <span class="badge">📺 Low Latency</span>
+        <span class="badge">🔄 Auto Recovery</span>
+        <span class="badge">📱 PWA</span>
+      </div>
+      <h1>מערכת ניהול מצלמות חכמה</h1>
+      <p>צפייה בזמן אמת, הקלטה, זיהוי מצלמות אוטומטי, שליטה מרחוק — הכל מהדפדפן. מותקן על המחשב שלך בלחיצה אחת.</p>
+    </section>
+
+    <!-- Install Options -->
+    <section class="install-section">
+      <h2>⬇️ התקנה</h2>
+      <p class="subtitle">בחר את האופציה המתאימה לך</p>
+
+      <div class="install-options">
+        <!-- Option 1: Full Install -->
+        <div class="install-card">
+          <div class="icon">💻</div>
+          <h3>התקנה מלאה על המחשב</h3>
+          <p>מוריד, מתקין ומפעיל את המערכת כשירות Windows שעולה אוטומטית עם המחשב.</p>
+          <button class="btn btn-primary" onclick="showInstallModal()">התקן עכשיו</button>
+        </div>
+
+        <!-- Option 2: View Only -->
+        <div class="install-card">
+          <div class="icon">📺</div>
+          <h3>צפייה מהדפדפן</h3>
+          <p>אם המערכת כבר מותקנת על מחשב ברשת — פשוט פתח את הלינק בדפדפן. בלי התקנה.</p>
+          <button class="btn btn-success" onclick="showViewModal()">פתח דשבורד</button>
+        </div>
+
+        <!-- Option 3: Download Source -->
+        <div class="install-card">
+          <div class="icon">📦</div>
+          <h3>הורדת קוד מקור</h3>
+          <p>הורד את הקוד מ-GitHub והתקן ידנית. מתאים למפתחים שרוצים להתאים אישית.</p>
+          <a href="https://github.com/vipogroup/vipo-vision-/archive/refs/heads/main.zip" class="btn btn-secondary">הורד ZIP</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <div class="features">
+      <div class="feature">
+        <div class="icon">🚀</div>
+        <h3>NVENC GPU Encoding</h3>
+        <p>קידוד וידאו מהיר על כרטיס NVIDIA. נפילה אוטומטית ל-CPU אם אין GPU.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">📺</div>
+        <h3>Low-Latency HLS</h3>
+        <p>סטרימינג עם latency של שנייה אחת. GOP קבוע ו-playlist אופטימלי.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔄</div>
+        <h3>Auto Recovery</h3>
+        <p>זיהוי סטרים תקוע + restart אוטומטי. עד 5 ניסיונות בחלון של 2 דקות.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔍</div>
+        <h3>Auto Discovery</h3>
+        <p>מזהה מצלמות ברשת אוטומטית — ONVIF, RTSP, HTTP ומצלמות USB.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🎮</div>
+        <h3>PTZ Control</h3>
+        <p>שליטה מלאה במצלמות — Pan, Tilt, Zoom עם תמיכה ב-ONVIF ו-HTTP CGI.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">💾</div>
+        <h3>Recording</h3>
+        <p>הקלטה לדיסק מקומי בפורמט MP4. ניהול הקלטות מהדשבורד.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">📱</div>
+        <h3>PWA — אפליקציה</h3>
+        <p>עובד כאפליקציה בטלפון ובמחשב. הדפדפן מציע "להתקין" אוטומטית.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔄</div>
+        <h3>Auto Update</h3>
+        <p>המערכת בודקת עדכונים מ-GitHub כל שעה ומתעדכנת אוטומטית.</p>
+      </div>
+    </div>
+
+    <!-- Requirements -->
+    <section class="requirements">
+      <h2>📋 דרישות מערכת</h2>
+      <div class="req-grid">
+        <div class="req-item">
+          <div class="dot required"></div>
+          <div class="info">
+            <strong>Windows 10/11</strong>
+            <span>64-bit</span>
+          </div>
+        </div>
+        <div class="req-item">
+          <div class="dot required"></div>
+          <div class="info">
+            <strong>Node.js 18+</strong>
+            <span><a href="https://nodejs.org/" target="_blank" style="color:#6366f1">nodejs.org</a></span>
+          </div>
+        </div>
+        <div class="req-item">
+          <div class="dot required"></div>
+          <div class="info">
+            <strong>Git</strong>
+            <span><a href="https://git-scm.com/" target="_blank" style="color:#6366f1">git-scm.com</a></span>
+          </div>
+        </div>
+        <div class="req-item">
+          <div class="dot required"></div>
+          <div class="info">
+            <strong>FFmpeg 6+</strong>
+            <span><a href="https://ffmpeg.org/" target="_blank" style="color:#6366f1">ffmpeg.org</a> — ב-PATH</span>
+          </div>
+        </div>
+        <div class="req-item">
+          <div class="dot optional"></div>
+          <div class="info">
+            <strong>NVIDIA GPU</strong>
+            <span>אופציונלי — ל-NVENC encoding מהיר</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>Built with ❤️ by <strong>VIPO Group</strong></p>
+    </footer>
+  </div>
+
+  <!-- Install Modal -->
+  <div class="modal-overlay" id="installModal">
+    <div class="modal">
+      <h2>💻 התקנה מלאה על המחשב</h2>
+      <p>ודא שמותקנים אצלך: <strong>Node.js</strong>, <strong>Git</strong>, <strong>FFmpeg</strong></p>
+
+      <ol class="steps">
+        <li>פתח <strong>PowerShell כ-Administrator</strong> (קליק ימני → Run as Administrator)</li>
+        <li>העתק והדבק את הפקודה הבאה:</li>
+      </ol>
+
+      <div class="cmd-box">
+        <button class="copy-btn" onclick="copyCommand(this)">העתק</button>
+        <code>powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/vipogroup/vipo-vision-/main/install.ps1 | iex"</code>
+      </div>
+
+      <ol class="steps" start="3">
+        <li>ההתקנה תרוץ אוטומטית — ייקח כ-2 דקות</li>
+        <li>בסיום, הדשבורד ייפתח אוטומטית בדפדפן</li>
+        <li>המערכת תעלה אוטומטית עם כל הפעלה של המחשב</li>
+      </ol>
+
+      <p style="margin-top:20px; font-size:0.85rem; color:#6b7280;">💡 אחרי ההתקנה, גש ל: <strong style="color:#10b981">http://localhost:5055</strong></p>
+
+      <button class="close-btn" onclick="closeModal('installModal')">סגור</button>
+    </div>
+  </div>
+
+  <!-- View Modal -->
+  <div class="modal-overlay" id="viewModal">
+    <div class="modal">
+      <h2>📺 צפייה מהדפדפן</h2>
+      <p>אם המערכת כבר מותקנת על מחשב ברשת שלך, פשוט פתח בדפדפן:</p>
+
+      <div class="cmd-box">
+        <button class="copy-btn" onclick="copyCommand(this)">העתק</button>
+        <code>http://&lt;IP-של-המחשב&gt;:5055</code>
+      </div>
+
+      <p>לדוגמה: <strong style="color:#10b981">http://10.0.0.4:5055</strong></p>
+      <p style="font-size:0.9rem; color:#9ca3af;">בקש מהאדם שהתקין את המערכת את ה-IP שלו. עובד מכל מכשיר ברשת — מחשב, טלפון, טאבלט.</p>
+      <p style="font-size:0.9rem; color:#9ca3af; margin-top:12px;">💡 הדפדפן יציע לך גם "להתקין כאפליקציה" — זה PWA שעובד גם בלי אינטרנט.</p>
+
+      <button class="close-btn" onclick="closeModal('viewModal')">סגור</button>
+    </div>
+  </div>
+
+  <script>
+    function showInstallModal() {
+      document.getElementById('installModal').classList.add('active');
+    }
+    function showViewModal() {
+      document.getElementById('viewModal').classList.add('active');
+    }
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
+    }
+    // Close modal on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(overlay => {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) overlay.classList.remove('active');
+      });
+    });
+
+    function copyCommand(btn) {
+      const code = btn.parentElement.querySelector('code').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = '✓ הועתק!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'העתק';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
