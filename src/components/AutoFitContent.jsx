@@ -50,7 +50,7 @@ export default function AutoFitContent({ children, className = '' }) {
     <div ref={outerRef} className={`flex-1 overflow-hidden ${className}`}>
       <div
         ref={innerRef}
-        className="flex flex-col min-h-full"
+        className="flex flex-col h-full overflow-hidden"
       >
         {children}
       </div>
