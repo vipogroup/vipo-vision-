@@ -42,6 +42,12 @@ app.use(express.static(distDir, {
 }));
 app.use('/test', express.static(path.join(__dirname, '..', 'public')));
 
+// Landing page for new users
+const docsDir = path.join(__dirname, '..', '..', 'docs');
+app.get('/welcome', (req, res) => {
+  res.sendFile(path.join(docsDir, 'index.html'));
+});
+
 // ─── HLS Static Files ──────────────────────────────────────────────
 app.use('/hls', (req, res, next) => {
   try {
