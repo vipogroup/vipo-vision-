@@ -20,6 +20,8 @@ import { discoverOnvifDevices } from './onvif/onvifDiscovery.js';
 import { createOnvifClient } from './onvif/onvifClient.js';
 import { scanNetwork, probeCloseLiChannels } from './discovery/networkScanner.js';
 import { detectUsbCameras } from './discovery/usbDetector.js';
+import { getSystemStreamsInfo } from './streamGuard.js';
+import { startAutoUpdate, checkForUpdates, getUpdateStatus } from './autoUpdate.js';
 
 const PORT = process.env.GATEWAY_PORT || 5055;
 const app = express();
@@ -227,6 +229,11 @@ app.post('/api/streams/stop', (req, res) => {
 
   const result = streamManager.stop(cameraId);
   res.json(result);
+});
+
+app.get('/api/streams/diagnostics', (req, res) => {
+  const diagnostics = streamManager.getDiagnostics();
+  res.json({ success: true, count: diagnostics.length, streams: diagnostics });
 });
 
 app.get('/api/streams/status', (req, res) => {
@@ -571,7 +578,7 @@ app.post('/api/discovery/auto', async (req, res) => {
                 brand: 'CloseLi',
                 model: 'Ingenic T23 + GC2083',
                 ptzType: 'http_cgi',
-                httpCgi: { templateName: 'hi3510', baseUrl: `http://${dev.ip}:8080` },
+                httpCgi: { templateName: 'hi3510', baseUrl: `http://${dev.ip}:8080/${ch.channel}` },
                 movementSpeed: 5,
                 maxZoom: 5,
                 panRange: [-180, 180],
@@ -640,6 +647,13 @@ app.post('/api/discovery/auto', async (req, res) => {
   });
 });
 
+// ─── System Streams (StreamGuard) ─────────────────────────────────
+
+app.get('/api/system/streams', (req, res) => {
+  const info = getSystemStreamsInfo();
+  res.json({ success: true, ...info });
+});
+
 app.get('/api/metrics', (req, res) => {
   const streams = streamManager.status();
   const recordings = streamManager.getAllRecordingStatus();
@@ -689,6 +703,17 @@ app.get('/api/metrics', (req, res) => {
       items: recordingList,
     },
   });
+});
+
+// ─── Auto Update ────────────────────────────────────────────────────
+
+app.get('/api/update/status', (req, res) => {
+  res.json({ success: true, ...getUpdateStatus() });
+});
+
+app.post('/api/update/check', (req, res) => {
+  const result = checkForUpdates();
+  res.json({ success: true, ...result });
 });
 
 // ─── Health ─────────────────────────────────────────────────────────
@@ -766,4 +791,7 @@ app.listen(PORT, () => {
 
   const cameras = cameraStore.getAll();
   log('info', `${cameras.length} camera(s) in store`);
+
+  // Start auto-update checker
+  startAutoUpdate();
 });

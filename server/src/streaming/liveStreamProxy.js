@@ -17,6 +17,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { log } from '../sanitize.js';
+import { getLiveTranscodeArgs } from '../gpuDetect.js';
 
 const NAL_TYPE_SPS = 7;
 
@@ -210,6 +211,8 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
   let lastSpsNal = null;
   let lastPpsNal = null;
 
+  let nvencFailed = false; // Track if NVENC failed so we can fallback to CPU
+
   function startFfmpeg() {
     const outFps = Number(process.env.LIVE_OUT_FPS || 15);
     const preset = process.env.LIVE_X264_PRESET || 'veryfast';
@@ -217,34 +220,31 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     const profile = process.env.LIVE_PROFILE || 'main';
     const maxrate = process.env.LIVE_MAXRATE || '2500k';
     const bufsize = process.env.LIVE_BUFSIZE || '5000k';
+
+    const enc = getLiveTranscodeArgs({ preset, crf, profile, maxrate, bufsize, forceCpu: nvencFailed });
+    log('info', `[${streamId}] STREAM ENCODER = ${enc.encoder === 'nvenc' ? 'NVENC' : 'CPU'} (live transcode)`);
+
     const args = [
       '-y',
       '-fflags', '+genpts+discardcorrupt+nobuffer',
       '-flags', 'low_delay',
       '-err_detect', 'ignore_err',
-      '-probesize', '2000000',
-      '-analyzeduration', '2000000',
+      // [LOW-LATENCY TUNING] Reduced probe/analyze for faster startup (was 2000000/2000000)
+      '-probesize', '500000',
+      '-analyzeduration', '500000',
       '-f', 'h264',
       '-i', 'pipe:0',
       '-vf', `setpts=N/(${outFps}*TB)`,
-      '-c:v', 'libx264',
-      '-preset', preset,
-      '-tune', 'zerolatency',
-      '-profile:v', profile,
-      '-crf', crf,
-      '-maxrate', maxrate,
-      '-bufsize', bufsize,
+      ...enc.args,
       '-pix_fmt', 'yuv420p',
       '-r', String(outFps),
       '-vsync', 'cfr',
-      '-g', String(outFps * 2),
-      '-keyint_min', String(outFps),
-      '-sc_threshold', '0',
       '-an',
+      // [LOW-LATENCY TUNING] hls_time 1s, hls_list_size 3, omit_endlist keeps playlist live
       '-f', 'hls',
-      '-hls_time', '2',
-      '-hls_list_size', '5',
-      '-hls_flags', 'delete_segments+append_list+independent_segments',
+      '-hls_time', '1',
+      '-hls_list_size', '3',
+      '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
       '-hls_segment_filename', segPattern,
       hlsPath,
     ];
@@ -288,6 +288,20 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     ffmpeg.on('close', (code) => {
       log('info', `[${streamId}] FFmpeg exited with code ${code}`);
       if (state.status !== 'stopped') {
+        // NVENC fallback: if NVENC was used and FFmpeg failed, retry with CPU
+        if (enc.encoder === 'nvenc' && code !== 0 && !nvencFailed) {
+          log('warn', `[${streamId}] NVENC encoding failed, falling back to CPU (libx264)...`);
+          nvencFailed = true;
+          // Reset SPS search state so FFmpeg can be restarted cleanly
+          foundSps = false;
+          spsBuffer = Buffer.alloc(0);
+          lastSpsNal = null;
+          lastPpsNal = null;
+          state.status = 'buffering';
+          state.error = null;
+          state.ffmpeg = null;
+          return;
+        }
         state.status = 'error';
         state.error = `FFmpeg exited with code ${code}`;
       }

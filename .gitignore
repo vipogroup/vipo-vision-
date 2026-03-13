@@ -19,6 +19,9 @@ server/node_modules
 server/recordings
 recordings
 
+# Windows service files
+daemon
+
 # Dev build artifacts (PWA dev)
 dev-dist
 

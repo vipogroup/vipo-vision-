@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   Camera,
   Maximize2,
+  Minimize2,
   Volume2,
   VolumeX,
   Video,
@@ -34,6 +35,7 @@ import {
   CircleStop,
   RotateCw,
   FlipHorizontal2,
+  Copy,
 } from 'lucide-react';
 import Header from '../components/Header';
 import StatusBadge from '../components/StatusBadge';
@@ -81,6 +83,31 @@ function DPadButton({ direction, icon, disabled, activeDirection, onStart, onSto
   );
 }
 
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = String(text || '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function CameraPlayerPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -108,6 +135,25 @@ export default function CameraPlayerPage() {
   const [showPtzOverlay, setShowPtzOverlay] = useState(false);
   const [enablePtzLoading, setEnablePtzLoading] = useState(false);
   const [enablePtzError, setEnablePtzError] = useState(null);
+  const [ptzErrorCopied, setPtzErrorCopied] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const videoContainerRef = useRef(null);
+  const toggleFullscreen = useCallback(() => {
+    const el = videoContainerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
   const cycleRotation = () => {
     const next = (rotation + 90) % 360;
     setRotation(next);
@@ -134,11 +180,12 @@ export default function CameraPlayerPage() {
     setEnablePtzLoading(true);
     try {
       const port = camera.port || 8080;
+      const baseUrl = camera.channel ? `http://${camera.ip}:${port}/${camera.channel}` : `http://${camera.ip}:${port}`;
       await cameraStore.updateCamera(camera.id, {
         ptzSupported: true,
         zoomSupported: true,
         ptzType: 'http_cgi',
-        httpCgi: { templateName: 'hi3510', baseUrl: `http://${camera.ip}:${port}` },
+        httpCgi: { templateName: 'hi3510', baseUrl },
         movementSpeed: camera.movementSpeed || 5,
         maxZoom: camera.maxZoom || 5,
         panRange: Array.isArray(camera.panRange) && camera.panRange.length === 2 ? camera.panRange : [-180, 180],
@@ -271,7 +318,7 @@ export default function CameraPlayerPage() {
 
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-5">
           <div className="xl:col-span-3 space-y-4">
-            <div className="relative aspect-video bg-slate-900/80 border border-slate-800/50 rounded-xl overflow-hidden group">
+            <div ref={videoContainerRef} className={`relative bg-slate-900/80 border border-slate-800/50 rounded-xl overflow-hidden group ${isFullscreen ? 'w-screen h-screen' : 'aspect-video'}`}>
               {streamState === 'running' && streamHlsUrl ? (
                 <div className="w-full h-full overflow-hidden flex items-center justify-center">
                   <div style={{ transform: videoTransform, transformOrigin: 'center center' }} className={is90 ? 'w-full h-full scale-[0.56]' : 'w-full h-full'}>
@@ -477,10 +524,11 @@ export default function CameraPlayerPage() {
                     )}
                   </div>
                   <button
+                    onClick={toggleFullscreen}
                     className="p-2 rounded-lg bg-slate-800/60 text-slate-300 hover:bg-slate-700/60 transition-colors"
-                    title="Fullscreen"
+                    title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                   >
-                    <Maximize2 className="w-4 h-4" />
+                    {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
@@ -605,6 +653,28 @@ export default function CameraPlayerPage() {
                     <div className="flex justify-between"><span className="text-slate-500">Zoom</span><span className="text-slate-300 font-mono">+ / -</span></div>
                     <div className="flex justify-between"><span className="text-slate-500">Stop</span><span className="text-slate-300 font-mono">Space</span></div>
                     <div className="flex justify-between"><span className="text-slate-500">Home</span><span className="text-slate-300 font-mono">H</span></div>
+                  </div>
+                </div>
+              )}
+
+              {(ptz.ptzSupported || ptz.zoomSupported) && ptz.error && (
+                <div className="px-4 py-2 border-b border-slate-800/40 bg-red-500/5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-[10px] text-red-400 break-words flex-1">{ptz.error}</div>
+                    <button
+                      onClick={async () => {
+                        const ok = await copyTextToClipboard(ptz.error);
+                        if (!ok) return;
+                        setPtzErrorCopied(true);
+                        setTimeout(() => setPtzErrorCopied(false), 1200);
+                      }}
+                      className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-slate-800/70 text-slate-300 border border-slate-700/60 hover:bg-slate-700/70 hover:text-white transition-colors"
+                      title="Copy PTZ log"
+                      type="button"
+                    >
+                      {ptzErrorCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      {ptzErrorCopied ? 'Copied' : 'Copy'}
+                    </button>
                   </div>
                 </div>
               )}

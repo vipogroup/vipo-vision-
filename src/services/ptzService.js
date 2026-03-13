@@ -32,7 +32,24 @@ async function gw(method, path, body) {
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`${GATEWAY_BASE}${path}`, opts);
-  return res.json();
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { message: text };
+  }
+
+  if (!res.ok) {
+    return {
+      ...data,
+      success: false,
+      message: data?.message || (text && text.trim()) || `HTTP ${res.status}`,
+      status: res.status,
+    };
+  }
+
+  return { ...data, success: data?.success ?? true };
 }
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -46,6 +63,7 @@ export const ptzService = {
       const result = await gw('POST', `/api/ptz/${cameraId}/move`, { direction, speed });
       return {
         success: result.success,
+        message: result.message,
         cameraId,
         direction,
         speed,
@@ -69,7 +87,7 @@ export const ptzService = {
     const camera = getCameraById(cameraId);
     if (isRealPtz(camera)) {
       const result = await gw('POST', `/api/ptz/${cameraId}/stop`);
-      return { success: result.success, cameraId, position: { pan: 0, tilt: 0 } };
+      return { success: result.success, message: result.message, cameraId, position: { pan: 0, tilt: 0 } };
     }
 
     const adapter = adapterFor(cameraId);
@@ -110,7 +128,7 @@ export const zoomService = {
     const camera = getCameraById(cameraId);
     if (isRealPtz(camera)) {
       const result = await gw('POST', `/api/ptz/${cameraId}/zoom`, { mode: 'in' });
-      return { success: result.success, cameraId, zoom: 1.0 };
+      return { success: result.success, message: result.message, cameraId, zoom: 1.0 };
     }
 
     const adapter = adapterFor(cameraId);
@@ -123,7 +141,7 @@ export const zoomService = {
     const camera = getCameraById(cameraId);
     if (isRealPtz(camera)) {
       const result = await gw('POST', `/api/ptz/${cameraId}/zoom`, { mode: 'out' });
-      return { success: result.success, cameraId, zoom: 1.0 };
+      return { success: result.success, message: result.message, cameraId, zoom: 1.0 };
     }
 
     const adapter = adapterFor(cameraId);
@@ -136,7 +154,7 @@ export const zoomService = {
     const camera = getCameraById(cameraId);
     if (isRealPtz(camera)) {
       const result = await gw('POST', `/api/ptz/${cameraId}/zoom`, { mode: 'set', value: level });
-      return { success: result.success, cameraId, zoom: level };
+      return { success: result.success, message: result.message, cameraId, zoom: level };
     }
 
     const adapter = adapterFor(cameraId);
@@ -164,6 +182,7 @@ export const presetService = {
       const result = await gw('POST', `/api/ptz/${cameraId}/presets/go`, { presetId: preset.id });
       return {
         success: result.success,
+        message: result.message,
         cameraId,
         preset: preset.name,
         position: { pan: preset.pan || 0, tilt: preset.tilt || 0, zoom: preset.zoom || 1.0 },
@@ -187,6 +206,7 @@ export const presetService = {
       const result = await gw('POST', `/api/ptz/${cameraId}/presets/save`, { name });
       return {
         success: result.success,
+        message: result.message,
         cameraId,
         preset: result.preset || { id: `p${Date.now()}`, name, pan: 0, tilt: 0, zoom: 1.0 },
       };
@@ -205,7 +225,7 @@ export const presetService = {
     const camera = getCameraById(cameraId);
     if (isRealPtz(camera)) {
       const result = await gw('DELETE', `/api/ptz/${cameraId}/presets/${presetId}`);
-      return { success: result.success, cameraId, deletedPresetId: presetId };
+      return { success: result.success, message: result.message, cameraId, deletedPresetId: presetId };
     }
 
     const adapter = adapterFor(cameraId);

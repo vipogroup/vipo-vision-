@@ -8,6 +8,7 @@ export function usePTZ(cameraId, camera) {
   const [isMoving, setIsMoving] = useState(false);
   const [activeDirection, setActiveDirection] = useState(null);
   const [lastAction, setLastAction] = useState(null);
+  const [error, setError] = useState(null);
   const moveInterval = useRef(null);
 
   const move = useCallback(
@@ -17,10 +18,20 @@ export function usePTZ(cameraId, camera) {
       setIsMoving(true);
       setLastAction({ type: 'move', direction, time: new Date() });
 
-      const result = await ptzService.move(cameraId, direction, speed);
-      if (result.success) {
-        setPosition(result.position);
+      try {
+        const result = await ptzService.move(cameraId, direction, speed);
+        if (result.success) {
+          setError(null);
+          setPosition(result.position);
+          return;
+        }
+        setError(result.message || 'PTZ move failed');
+      } catch (err) {
+        setError(err?.message || 'PTZ move failed');
       }
+
+      setIsMoving(false);
+      setActiveDirection(null);
     },
     [cameraId, speed, camera?.ptzSupported]
   );
@@ -41,7 +52,14 @@ export function usePTZ(cameraId, camera) {
     }
     setActiveDirection(null);
     setIsMoving(false);
-    await ptzService.stop(cameraId);
+
+    try {
+      const result = await ptzService.stop(cameraId);
+      if (result?.success) setError(null);
+      else setError(result?.message || 'PTZ stop failed');
+    } catch (err) {
+      setError(err?.message || 'PTZ stop failed');
+    }
   }, [cameraId]);
 
   const stop = useCallback(async () => {
@@ -51,28 +69,52 @@ export function usePTZ(cameraId, camera) {
 
   const zoomIn = useCallback(async () => {
     if (!camera?.zoomSupported) return;
-    const result = await zoomService.zoomIn(cameraId);
-    if (result.success) {
-      setZoom(result.zoom);
-      setLastAction({ type: 'zoomIn', zoom: result.zoom, time: new Date() });
+
+    try {
+      const result = await zoomService.zoomIn(cameraId);
+      if (result.success) {
+        setError(null);
+        setZoom(result.zoom);
+        setLastAction({ type: 'zoomIn', zoom: result.zoom, time: new Date() });
+        return;
+      }
+      setError(result.message || 'Zoom in failed');
+    } catch (err) {
+      setError(err?.message || 'Zoom in failed');
     }
   }, [cameraId, camera?.zoomSupported]);
 
   const zoomOut = useCallback(async () => {
     if (!camera?.zoomSupported) return;
-    const result = await zoomService.zoomOut(cameraId);
-    if (result.success) {
-      setZoom(result.zoom);
-      setLastAction({ type: 'zoomOut', zoom: result.zoom, time: new Date() });
+
+    try {
+      const result = await zoomService.zoomOut(cameraId);
+      if (result.success) {
+        setError(null);
+        setZoom(result.zoom);
+        setLastAction({ type: 'zoomOut', zoom: result.zoom, time: new Date() });
+        return;
+      }
+      setError(result.message || 'Zoom out failed');
+    } catch (err) {
+      setError(err?.message || 'Zoom out failed');
     }
   }, [cameraId, camera?.zoomSupported]);
 
   const setZoomLevel = useCallback(
     async (level) => {
       if (!camera?.zoomSupported) return;
-      const result = await zoomService.setZoom(cameraId, level);
-      if (result.success) {
-        setZoom(result.zoom);
+
+      try {
+        const result = await zoomService.setZoom(cameraId, level);
+        if (result.success) {
+          setError(null);
+          setZoom(result.zoom);
+          return;
+        }
+        setError(result.message || 'Set zoom failed');
+      } catch (err) {
+        setError(err?.message || 'Set zoom failed');
       }
     },
     [cameraId, camera?.zoomSupported]
@@ -90,10 +132,18 @@ export function usePTZ(cameraId, camera) {
     async (preset) => {
       setIsMoving(true);
       setLastAction({ type: 'preset', name: preset.name, time: new Date() });
-      const result = await presetService.goToPreset(cameraId, preset);
-      if (result.success) {
-        setPosition({ pan: result.position.pan, tilt: result.position.tilt });
-        setZoom(result.position.zoom);
+
+      try {
+        const result = await presetService.goToPreset(cameraId, preset);
+        if (result.success) {
+          setError(null);
+          setPosition({ pan: result.position.pan, tilt: result.position.tilt });
+          setZoom(result.position.zoom);
+        } else {
+          setError(result.message || 'Preset move failed');
+        }
+      } catch (err) {
+        setError(err?.message || 'Preset move failed');
       }
       setIsMoving(false);
     },
@@ -104,18 +154,36 @@ export function usePTZ(cameraId, camera) {
     setIsMoving(true);
     setLastAction({ type: 'home', time: new Date() });
     const homePreset = { name: 'Home', pan: 0, tilt: 0, zoom: 1.0 };
-    const result = await presetService.goToPreset(cameraId, homePreset);
-    if (result.success) {
-      setPosition({ pan: 0, tilt: 0 });
-      setZoom(1.0);
+
+    try {
+      const result = await presetService.goToPreset(cameraId, homePreset);
+      if (result.success) {
+        setError(null);
+        setPosition({ pan: 0, tilt: 0 });
+        setZoom(1.0);
+      } else {
+        setError(result.message || 'Home failed');
+      }
+    } catch (err) {
+      setError(err?.message || 'Home failed');
     }
     setIsMoving(false);
   }, [cameraId]);
 
   const savePreset = useCallback(
     async (name) => {
-      const result = await presetService.savePreset(cameraId, name);
-      return result.success ? result.preset : null;
+      try {
+        const result = await presetService.savePreset(cameraId, name);
+        if (result.success) {
+          setError(null);
+          return result.preset;
+        }
+        setError(result.message || 'Save preset failed');
+        return null;
+      } catch (err) {
+        setError(err?.message || 'Save preset failed');
+        return null;
+      }
     },
     [cameraId]
   );
@@ -127,6 +195,7 @@ export function usePTZ(cameraId, camera) {
     isMoving,
     activeDirection,
     lastAction,
+    error,
     move,
     startContinuousMove,
     stopContinuousMove,

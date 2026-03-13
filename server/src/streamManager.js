@@ -13,6 +13,11 @@ import fs from 'fs';
 import path from 'path';
 import { sanitizeUrl, log } from './sanitize.js';
 import { startLiveStream } from './streaming/liveStreamProxy.js';
+import { detectNvenc, isNvencAvailable, getRtspTranscodeArgs, getHttpTranscodeArgs, getRecordingArgs } from './gpuDetect.js';
+import { canStartStream, registerProcess, unregisterProcess, resetRestartCount, initStreamGuard } from './streamGuard.js';
+
+// Detect NVENC on module load
+detectNvenc();
 
 const HLS_ROOT = path.resolve('hls');
 const RECORDINGS_ROOT = path.resolve('recordings');
@@ -24,6 +29,12 @@ const STREAM_IDLE_TTL_LIVE_MS = Number(process.env.STREAM_IDLE_TTL_LIVE_MS || 90
 const STREAM_IDLE_TTL_HTTP_MS = Number(process.env.STREAM_IDLE_TTL_HTTP_MS || 180_000);
 const STREAM_IDLE_TTL_RTSP_MS = Number(process.env.STREAM_IDLE_TTL_RTSP_MS || 180_000);
 const STREAM_CLEANUP_INTERVAL_MS = Number(process.env.STREAM_CLEANUP_INTERVAL_MS || 30_000);
+
+// ─── Health Monitor constants ────────────────────────────────────
+const HEALTH_CHECK_INTERVAL_MS = 5_000;   // check every 5 seconds
+const HEALTH_STALE_THRESHOLD_MS = 10_000; // unhealthy after 10 seconds without m3u8 update
+const HEALTH_MAX_RESTARTS = 5;
+const HEALTH_RESTART_WINDOW_MS = 2 * 60_000; // 2 minutes
 
 function getIdleTtlMs(stream) {
   if (!stream) return STREAM_IDLE_TTL_RTSP_MS;
@@ -78,7 +89,7 @@ function isHttpSource(url) {
   return url && (url.startsWith('http://') || url.startsWith('https://'));
 }
 
-function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
+function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false, forceLibx264 = false) {
   const segmentPath = path.join(hlsDir, 'segment_%03d.ts');
   const playlistPath = path.join(hlsDir, 'index.m3u8');
 
@@ -92,25 +103,17 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
       '-reconnect', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5',
-      '-probesize', '5000000',
-      '-analyzeduration', '5000000',
+      // [LOW-LATENCY TUNING] Reduced probe/analyze for faster startup (was 5000000/5000000)
+      '-probesize', '1000000',
+      '-analyzeduration', '1000000',
       '-f', 'h264',
       '-i', inputUrl,
       '-an',
     );
     if (transcode) {
-      args.push(
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-profile:v', 'main',
-        '-crf', '22',
-        '-maxrate', '5000k',
-        '-bufsize', '10000k',
-        '-g', '30',
-        '-keyint_min', '15',
-        '-sc_threshold', '0',
-        '-force_key_frames', 'expr:gte(t,n_forced*2)',
-      );
+      const enc = getHttpTranscodeArgs(forceLibx264);
+      log('info', `[${cameraId}] STREAM ENCODER = ${enc.encoder === 'nvenc' ? 'NVENC' : 'CPU'} (HTTP transcode)`);
+      args.push(...enc.args);
     } else {
       // Try codec copy first (preserves full 1600x960 quality)
       args.push(
@@ -127,25 +130,20 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
     );
 
     if (transcode) {
-      args.push(
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v', 'baseline',
-        '-b:v', '1500k',
-        '-maxrate', '1500k',
-        '-bufsize', '3000k',
-      );
+      const enc = getRtspTranscodeArgs(forceLibx264);
+      log('info', `[${cameraId}] STREAM ENCODER = ${enc.encoder === 'nvenc' ? 'NVENC' : 'CPU'} (RTSP transcode)`);
+      args.push(...enc.args);
     } else {
       args.push('-c:v', 'copy');
     }
   }
 
+  // [LOW-LATENCY TUNING] hls_time 1s, hls_list_size 3, omit_endlist keeps playlist live
   args.push(
     '-f', 'hls',
-    '-hls_time', '2',
-    '-hls_list_size', '10',
-    '-hls_flags', 'delete_segments+append_list',
+    '-hls_time', '1',
+    '-hls_list_size', '3',
+    '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
     '-hls_segment_filename', segmentPath,
     playlistPath,
   );
@@ -153,16 +151,27 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false) {
   return { args, playlistPath };
 }
 
-function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
+function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true, forceLibx264 = false) {
   const hlsDir = path.join(HLS_ROOT, cameraId);
   ensureDir(hlsDir);
   if (clean) cleanDir(hlsDir);
 
   const sourceType = isHttpSource(inputUrl) ? 'http' : 'rtsp';
   const mode = sourceType === 'http' ? (transcode ? 'transcode' : 'copy') : (transcode ? 'transcode' : 'copy');
-  log('info', `[${cameraId}] Starting FFmpeg (${mode}, ${sourceType}) for ${sanitizeUrl(inputUrl)}`);
 
-  const { args, playlistPath } = buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode);
+  const usedNvenc = transcode && isNvencAvailable() && !forceLibx264;
+  const encoder = usedNvenc ? 'h264_nvenc' : (transcode ? 'libx264' : 'copy');
+  const { args, playlistPath } = buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode, forceLibx264);
+
+  // Detailed startup log
+  const startTs = new Date().toISOString();
+  log('info', `[${cameraId}] ── STREAM START ──────────────────`);
+  log('info', `[${cameraId}]   timestamp : ${startTs}`);
+  log('info', `[${cameraId}]   inputType : ${sourceType}`);
+  log('info', `[${cameraId}]   encoder   : ${encoder}`);
+  log('info', `[${cameraId}]   mode      : ${mode}`);
+  log('info', `[${cameraId}]   ffmpeg args: ffmpeg ${args.join(' ')}`);
+  log('info', `[${cameraId}] ────────────────────────────────────`);
 
   const proc = spawn('ffmpeg', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -176,13 +185,22 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
     state: 'starting',
     mode,
     sourceType,
-    startedAt: new Date().toISOString(),
+    encoder,
+    ffmpegArgs: args,
+    startedAt: startTs,
     lastAccessedAt: Date.now(),
     hlsUrl: `/hls/${cameraId}/index.m3u8`,
     playlistPath,
     hlsDir,
     stderrBuffer: '',
     error: null,
+    usedNvenc,
+    // Health monitor fields
+    restartCount: 0,
+    restartTimestamps: [],
+    lastRestartAt: null,
+    lastHealthyAt: null,
+    healthStatus: 'starting',
   };
 
   proc.stderr.on('data', (chunk) => {
@@ -194,11 +212,26 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
     }
   });
 
+  // Register with StreamGuard for monitoring
+  registerProcess(cameraId, {
+    pid: proc.pid,
+    encoder: usedNvenc ? 'nvenc' : (transcode ? 'cpu' : 'copy'),
+    startTime: stream.startedAt,
+    bitrate: 'detecting',
+    fps: 'detecting',
+    playlistPath,
+    hlsDir: stream.hlsDir,
+    inputUrl,
+    transcode,
+    forceLibx264,
+  });
+
   // Watch for playlist file to confirm stream is running
   const checkInterval = setInterval(() => {
     if (fs.existsSync(playlistPath)) {
       if (stream.state === 'starting') {
         stream.state = 'running';
+        resetRestartCount(cameraId);
         log('info', `[${cameraId}] Stream is running (${mode})`);
       }
       clearInterval(checkInterval);
@@ -277,6 +310,17 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
       }
     }
 
+    // NVENC fallback: if transcode with NVENC failed, retry with CPU (libx264)
+    if (transcode && stream.usedNvenc && code !== 0) {
+      const reason = stream.stderrBuffer.slice(-500).trim();
+      log('warn', `[${cameraId}] NVENC encoding failed (code=${code}), falling back to CPU (libx264)`);
+      log('warn', `[${cameraId}] NVENC failure reason: ${reason}`);
+      activeStreams.delete(cameraId);
+      const cpuStream = spawnFfmpeg(cameraId, inputUrl, true, true, true);
+      activeStreams.set(cameraId, cpuStream);
+      return;
+    }
+
     stream.state = 'error';
     stream.error = `FFmpeg exited with code ${code}`;
   });
@@ -287,6 +331,10 @@ function spawnFfmpeg(cameraId, inputUrl, transcode = false, clean = true) {
 export const streamManager = {
   getHlsRoot() {
     return HLS_ROOT;
+  },
+
+  getActiveStreams() {
+    return activeStreams;
   },
 
   touch(cameraId) {
@@ -308,6 +356,13 @@ export const streamManager = {
       this.stop(cameraId);
     }
 
+    // Stream limit check
+    const limitCheck = canStartStream();
+    if (!limitCheck.allowed) {
+      log('warn', `[${cameraId}] ${limitCheck.reason}`);
+      return { success: false, message: limitCheck.reason };
+    }
+
     const stream = spawnFfmpeg(cameraId, inputUrl, false);
     activeStreams.set(cameraId, stream);
 
@@ -326,6 +381,13 @@ export const streamManager = {
         return { success: true, stream: toPublic(existing), message: 'Stream already running' };
       }
       this.stop(cameraId);
+    }
+
+    // Stream limit check
+    const limitCheck = canStartStream();
+    if (!limitCheck.allowed) {
+      log('warn', `[${cameraId}] ${limitCheck.reason}`);
+      return { success: false, message: limitCheck.reason };
     }
 
     const hlsDir = path.join(HLS_ROOT, cameraId);
@@ -357,6 +419,12 @@ export const streamManager = {
       stderrBuffer: '',
       error: null,
       _liveProxy: proxy,
+      // Health monitor fields
+      restartCount: 0,
+      restartTimestamps: [],
+      lastRestartAt: null,
+      lastHealthyAt: null,
+      healthStatus: 'starting',
     };
 
     // Poll proxy status to update stream state
@@ -380,6 +448,20 @@ export const streamManager = {
       }
     }, 500);
 
+    // Register with StreamGuard for monitoring
+    registerProcess(cameraId, {
+      pid: null, // live proxy manages its own FFmpeg
+      encoder: 'live',
+      startTime: stream.startedAt,
+      bitrate: 'detecting',
+      fps: 'detecting',
+      playlistPath: stream.playlistPath,
+      hlsDir: stream.hlsDir,
+      inputUrl: stream.inputUrl,
+      transcode: true,
+      forceLibx264: false,
+    });
+
     activeStreams.set(cameraId, stream);
     log('info', `[${cameraId}] Live stream started from ${cameraIp}:${streamPort}`);
 
@@ -395,6 +477,9 @@ export const streamManager = {
     stream.state = 'stopped';
     stream._stopRequested = true;
     closeLiMeta.delete(cameraId);
+
+    // Unregister from StreamGuard
+    unregisterProcess(cameraId);
 
     // Stop live proxy if present
     if (stream._liveProxy) {
@@ -448,6 +533,28 @@ export const streamManager = {
     }
   },
 
+  getDiagnostics() {
+    const result = [];
+    for (const [id, stream] of activeStreams) {
+      result.push({
+        cameraId: id,
+        status: stream.state,
+        encoder: stream.encoder || (stream._liveProxy ? 'live_transcode' : 'unknown'),
+        pid: stream.pid || (stream._liveProxy ? 'managed' : null),
+        startedAt: stream.startedAt,
+        inputType: stream.sourceType,
+        outputPath: stream.playlistPath,
+        lastError: stream.error,
+        ffmpegArgs: stream.ffmpegArgs ? stream.ffmpegArgs.join(' ') : (stream._liveProxy ? 'managed by liveStreamProxy' : null),
+        restartCount: stream.restartCount || 0,
+        lastRestartAt: stream.lastRestartAt || null,
+        lastHealthyAt: stream.lastHealthyAt || null,
+        healthStatus: stream.healthStatus || 'unknown',
+      });
+    }
+    return result;
+  },
+
   // ─── Recording to local disk ──────────────────────────────────
 
   startRecording(cameraId, inputUrl, cameraName = '') {
@@ -468,10 +575,11 @@ export const streamManager = {
     } else {
       args.push('-rtsp_transport', 'tcp');
     }
+    const recEnc = getRecordingArgs(this._recForceCpu);
+    log('info', `[${cameraId}] STREAM ENCODER = ${recEnc.encoder === 'nvenc' ? 'NVENC' : 'CPU'} (recording)`);
     args.push(
       '-i', inputUrl,
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-      '-profile:v', 'baseline', '-b:v', '1500k',
+      ...recEnc.args,
       '-an',
       '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov',
       filePath,
@@ -488,6 +596,7 @@ export const streamManager = {
       startedAt: new Date().toISOString(),
       state: 'recording',
       error: null,
+      usedNvenc: recEnc.encoder === 'nvenc',
     };
 
     proc.on('error', (err) => {
@@ -498,6 +607,14 @@ export const streamManager = {
 
     proc.on('exit', (code) => {
       if (rec.state !== 'stopped') {
+        // NVENC fallback: if recording with NVENC failed, retry with CPU
+        if (rec.usedNvenc && code !== 0) {
+          log('warn', `[${cameraId}] NVENC recording failed, falling back to CPU (libx264)...`);
+          activeRecordings.delete(cameraId);
+          this._recForceCpu = true;
+          this.startRecording(cameraId, inputUrl, cameraName);
+          return;
+        }
         // If CloseLi segment ended, auto-restart recording with next segment
         if (code === 0 && closeLiMeta.has(cameraId)) {
           log('info', `[${cameraId}] Recording segment finished, finding next...`);
@@ -556,11 +673,143 @@ export const streamManager = {
   },
 };
 
+// Initialize StreamGuard with reference to streamManager
+initStreamGuard(streamManager);
+
+// ─── Health Monitor ──────────────────────────────────────────────
+// Checks every 5s if each active stream's m3u8 was updated recently.
+// If stale >10s → unhealthy → auto-restart (up to 5 times in 2 min).
+
+const _healthTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [cameraId, stream] of activeStreams) {
+    // Skip streams that are not supposed to be running
+    if (!stream || stream.state === 'stopped' || stream.healthStatus === 'failed') continue;
+
+    // Skip streams still starting up (give them 15s grace)
+    const startAge = now - new Date(stream.startedAt).getTime();
+    if (stream.state === 'starting' && startAge < 15_000) continue;
+
+    const playlistPath = stream.playlistPath;
+    if (!playlistPath) continue;
+
+    try {
+      if (fs.existsSync(playlistPath)) {
+        const stat = fs.statSync(playlistPath);
+        const mtime = stat.mtimeMs;
+        const staleness = now - mtime;
+
+        if (staleness <= HEALTH_STALE_THRESHOLD_MS) {
+          // Healthy
+          if (stream.healthStatus !== 'healthy') {
+            stream.healthStatus = 'healthy';
+          }
+          stream.lastHealthyAt = new Date().toISOString();
+          continue;
+        }
+
+        // Stale — unhealthy
+        if (stream.healthStatus === 'healthy' || stream.healthStatus === 'starting') {
+          log('warn', `[${cameraId}] Stream unhealthy – m3u8 stale for ${Math.round(staleness / 1000)}s, restarting`);
+        }
+        stream.healthStatus = 'unhealthy';
+      } else {
+        // No playlist file yet — if stream has been up >15s, it's unhealthy
+        if (startAge > 15_000) {
+          if (stream.healthStatus !== 'unhealthy') {
+            log('warn', `[${cameraId}] Stream unhealthy – no m3u8 file after ${Math.round(startAge / 1000)}s`);
+          }
+          stream.healthStatus = 'unhealthy';
+        } else {
+          continue;
+        }
+      }
+    } catch {
+      stream.healthStatus = 'unhealthy';
+    }
+
+    // ── Auto-restart logic ──
+    if (stream.healthStatus !== 'unhealthy') continue;
+
+    // Prune restart timestamps outside the window
+    stream.restartTimestamps = (stream.restartTimestamps || []).filter(
+      (ts) => now - ts < HEALTH_RESTART_WINDOW_MS
+    );
+
+    if (stream.restartTimestamps.length >= HEALTH_MAX_RESTARTS) {
+      // Exceeded max restarts in window
+      if (stream.healthStatus !== 'failed') {
+        stream.healthStatus = 'failed';
+        stream.state = 'error';
+        stream.error = `Stream marked as failed after ${HEALTH_MAX_RESTARTS} restarts in ${HEALTH_RESTART_WINDOW_MS / 1000}s`;
+        log('error', `[${cameraId}] Stream marked as failed after ${HEALTH_MAX_RESTARTS} restarts in ${HEALTH_RESTART_WINDOW_MS / 1000}s`);
+      }
+      continue;
+    }
+
+    // Perform restart
+    stream.healthStatus = 'restarting';
+    stream.restartCount = (stream.restartCount || 0) + 1;
+    stream.restartTimestamps.push(now);
+    stream.lastRestartAt = new Date().toISOString();
+
+    log('info', `[${cameraId}] Stream restart executed (attempt ${stream.restartCount}, ${stream.restartTimestamps.length}/${HEALTH_MAX_RESTARTS} in window)`);
+
+    // Kill existing FFmpeg process
+    if (stream.process && !stream.process.killed) {
+      try { stream.process.kill('SIGTERM'); } catch { /* ignore */ }
+    }
+    if (stream._liveProxy) {
+      try { stream._liveProxy.stop(); } catch { /* ignore */ }
+    }
+
+    // Restart after a short delay to let the old process die
+    const restartCameraId = cameraId;
+    const restartInputUrl = stream.inputUrl;
+    const restartSourceType = stream.sourceType;
+    const savedRestartCount = stream.restartCount;
+    const savedRestartTimestamps = [...stream.restartTimestamps];
+    const savedLastRestartAt = stream.lastRestartAt;
+    const savedLastHealthyAt = stream.lastHealthyAt;
+
+    setTimeout(() => {
+      // Remove old stream
+      activeStreams.delete(restartCameraId);
+      unregisterProcess(restartCameraId);
+
+      let newStream;
+      if (restartSourceType === 'tcp_live') {
+        // Re-use startLive for live proxy streams
+        // Extract ip/port from tcp://ip:port
+        const match = restartInputUrl.match(/tcp:\/\/([^:]+):(\d+)/);
+        if (match) {
+          const result = streamManager.startLive(restartCameraId, match[1], Number(match[2]), stream.liveChannel || 0);
+          newStream = activeStreams.get(restartCameraId);
+        }
+      } else {
+        newStream = spawnFfmpeg(restartCameraId, restartInputUrl, false);
+        activeStreams.set(restartCameraId, newStream);
+      }
+
+      // Carry over health state to new stream
+      if (newStream) {
+        newStream.restartCount = savedRestartCount;
+        newStream.restartTimestamps = savedRestartTimestamps;
+        newStream.lastRestartAt = savedLastRestartAt;
+        newStream.lastHealthyAt = savedLastHealthyAt;
+        newStream.healthStatus = 'starting';
+      }
+    }, 1000);
+  }
+}, HEALTH_CHECK_INTERVAL_MS);
+if (typeof _healthTimer.unref === 'function') _healthTimer.unref();
+
 function toPublic(stream) {
   return {
     cameraId: stream.cameraId,
     state: stream.state,
     mode: stream.mode,
+    encoder: stream.encoder || 'unknown',
     startedAt: stream.startedAt,
     hlsUrl: stream.hlsUrl,
     error: stream.error,

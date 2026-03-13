@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Camera, Video, AlertTriangle, HardDrive, Grid2x2, Grid3x3, LayoutGrid, Square } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Camera, Video, AlertTriangle, HardDrive, Grid2x2, Grid3x3, LayoutGrid, Square, Maximize2, Minimize2 } from 'lucide-react';
 import Header from '../components/Header';
 import StatsCard from '../components/StatsCard';
 import CameraGrid from '../components/CameraGrid';
@@ -20,6 +20,25 @@ export default function DashboardPage() {
   const [streamMode, setStreamMode] = useState('hd'); // 'hd' or 'live'
   const { cameras } = useCameraStore();
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const dashboardRef = useRef(null);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = dashboardRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
   const onlineCount = cameras.filter((c) => c.status === 'online' || c.status === 'motion').length;
   const _OfflineCount = cameras.filter((c) => c.status === 'offline').length;
   const recordingCount = cameras.filter((c) => c.recording).length;
@@ -28,7 +47,7 @@ export default function DashboardPage() {
   return (
     <>
       <Header title={t('dashboard.title')} subtitle={`${cameras.length} ${t('nav.cameras').toLowerCase()}`} />
-      <div className="flex-1 flex flex-col p-1 sm:p-2 gap-1.5 sm:gap-2 min-h-0 overflow-hidden">
+      <div ref={dashboardRef} className={`flex-1 flex flex-col p-1 sm:p-2 gap-1.5 sm:gap-2 min-h-0 overflow-hidden ${isFullscreen ? 'bg-slate-950' : ''}`}>
         <div className="flex items-center justify-between flex-shrink-0 flex-wrap gap-1.5 sm:gap-2">
           <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3">
             {gridOptions.map((opt) => (
@@ -73,6 +92,13 @@ export default function DashboardPage() {
               <span className="text-emerald-400">{onlineCount} online</span>
               <span className="text-blue-400">{recordingCount} rec</span>
             </div>
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 rounded-lg bg-slate-800/60 text-slate-300 hover:text-cyan-400 hover:bg-slate-700/60 transition-colors"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
           </div>
         </div>
 

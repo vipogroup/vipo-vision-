@@ -179,15 +179,141 @@ async function doRequest(spec, auth) {
   return text;
 }
 
+function getErrorHttpStatus(err) {
+  const msg = err?.message || '';
+  const m = msg.match(/\bHTTP\s+(\d{3})\b/);
+  if (!m) return null;
+  return Number(m[1]);
+}
+
+function getErrorNetworkCode(err) {
+  const code = err?.cause?.code || err?.code;
+  if (typeof code === 'string' && code.length > 0) return code;
+  const msg = err?.message || '';
+  const m = msg.match(/\b(ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ECONNRESET|EPIPE)\b/);
+  return m ? m[1] : null;
+}
+
+function isRetryableHi3510Error(err) {
+  const status = getErrorHttpStatus(err);
+  if (status === 404) return true;
+  if (getErrorNetworkCode(err)) return true;
+  const msg = String(err?.message || '').toLowerCase();
+  if (msg.includes('fetch failed')) return true;
+  return false;
+}
+
+function formatAttemptError(err) {
+  const status = getErrorHttpStatus(err);
+  if (status) return `HTTP ${status}`;
+  const code = getErrorNetworkCode(err);
+  if (code) return code;
+  return err?.message || String(err);
+}
+
+function stripChannelSuffix(baseUrl, channel) {
+  if (!baseUrl || !channel) return baseUrl;
+  const normalized = normalizeBaseUrl(baseUrl);
+
+  try {
+    const u = new URL(normalized);
+    const path = u.pathname.replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean);
+    const last = segments.length > 0 ? segments[segments.length - 1] : '';
+    if (last && last.toLowerCase() === String(channel).toLowerCase()) {
+      segments.pop();
+      u.pathname = `/${segments.join('/')}`;
+      return normalizeBaseUrl(u.toString());
+    }
+    return normalized;
+  } catch {
+    const suffix = `/${channel}`;
+    if (normalized.toLowerCase().endsWith(suffix.toLowerCase())) {
+      return normalized.slice(0, -suffix.length);
+    }
+    return normalized;
+  }
+}
+
+function withPort(baseUrl, port) {
+  if (!baseUrl) return baseUrl;
+  try {
+    const u = new URL(baseUrl);
+    u.port = String(port);
+    return normalizeBaseUrl(u.toString());
+  } catch {
+    return baseUrl;
+  }
+}
+
+function getBaseChannelVariant(channel) {
+  if (!channel) return null;
+  const m = String(channel).match(/^(xxxxS_[^/]+?)_\d+$/i);
+  if (!m) return null;
+  return m[1];
+}
+
 function getTemplate(camera) {
   const tplName = camera.httpCgi?.templateName;
   if (!tplName || !TEMPLATES[tplName]) return null;
   return TEMPLATES[tplName];
 }
 
+function normalizeBaseUrl(baseUrl) {
+  if (!baseUrl) return baseUrl;
+  return String(baseUrl).replace(/\/+$/, '');
+}
+
+function ensureChannelPrefix(baseUrl, channel) {
+  if (!baseUrl || !channel) return baseUrl;
+  const normalized = normalizeBaseUrl(baseUrl);
+
+  try {
+    const u = new URL(normalized);
+    const path = u.pathname.replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean);
+    const last = segments.length > 0 ? segments[segments.length - 1] : '';
+    if (last && last.toLowerCase() === String(channel).toLowerCase()) {
+      return normalized;
+    }
+    u.pathname = `${path}/${encodeURIComponent(channel)}`;
+    return normalizeBaseUrl(u.toString());
+  } catch {
+    // Fallback for non-URL strings
+    if (normalized.toLowerCase().includes(`/${String(channel).toLowerCase()}`)) return normalized;
+    return `${normalized}/${channel}`;
+  }
+}
+
+function inferCloseLiChannel(camera) {
+  if (camera?.channel) return camera.channel;
+  const httpUrl = camera?.httpUrl;
+  if (!httpUrl) return null;
+
+  try {
+    const u = new URL(httpUrl);
+    const m = u.pathname.match(/\/(xxxxS_[^/]+)\/rawdata\/?$/i);
+    if (m && m[1]) return m[1];
+  } catch {
+    const m = String(httpUrl).match(/\/(xxxxS_[^/]+)\/rawdata\/?$/i);
+    if (m && m[1]) return m[1];
+  }
+
+  return null;
+}
+
 function getBaseUrl(camera) {
-  if (camera.httpCgi?.baseUrl) return camera.httpCgi.baseUrl;
-  return `http://${camera.ip}:${camera.port || 80}`;
+  const tplName = camera.httpCgi?.templateName;
+  const rawBase = camera.httpCgi?.baseUrl || `http://${camera.ip}:${camera.port || 80}`;
+  const baseUrl = normalizeBaseUrl(rawBase);
+
+  // CloseLi (Hi3510) cameras require the channel prefix in the URL path.
+  if (tplName === 'hi3510') {
+    const channel = inferCloseLiChannel(camera);
+    if (channel) return ensureChannelPrefix(baseUrl, channel);
+  }
+
+  return baseUrl;
 }
 
 function getAuth(camera) {
@@ -200,24 +326,166 @@ export const httpCgiAdapter = {
   async move(camera, direction, speed = 0.5) {
     const tpl = getTemplate(camera);
     if (!tpl) throw new Error(`No HTTP CGI template for camera ${camera.id}`);
-    const spec = tpl.move(getBaseUrl(camera), direction, speed);
-    await doRequest(spec, getAuth(camera));
+
+    const baseUrl = getBaseUrl(camera);
+    const auth = getAuth(camera);
+    const channel = inferCloseLiChannel(camera);
+
+    const candidates = [baseUrl];
+    if (tpl === TEMPLATES.hi3510 && channel) {
+      const stripped = stripChannelSuffix(baseUrl, channel);
+      candidates.push(stripped);
+
+      const baseChannel = getBaseChannelVariant(channel);
+      if (baseChannel) {
+        candidates.push(ensureChannelPrefix(stripped, baseChannel));
+      }
+
+      candidates.push(withPort(stripped, 80));
+      if (baseChannel) {
+        candidates.push(withPort(ensureChannelPrefix(withPort(stripped, 80), baseChannel), 80));
+      }
+      candidates.push(withPort(baseUrl, 80));
+    }
+
+    let lastErr = null;
+    const attempts = [];
+    for (const b of candidates.filter(Boolean)) {
+      try {
+        const spec = tpl.move(b, direction, speed);
+        await doRequest(spec, auth);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        try {
+          const spec = tpl.move(b, direction, speed);
+          attempts.push({ url: spec.url, error: formatAttemptError(err) });
+        } catch {
+          attempts.push({ url: String(b), error: formatAttemptError(err) });
+        }
+        const status = getErrorHttpStatus(err);
+        if (tpl === TEMPLATES.hi3510 && (status === 404 || isRetryableHi3510Error(err))) {
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (lastErr) {
+      const msg = `HTTP-CGI move ${direction} failed (${tpl.name}). Tried: ${attempts.map((a) => `${a.url} => ${a.error}`).join(' | ')}`;
+      throw new Error(msg, { cause: lastErr });
+    }
     log('info', `[${camera.id}] HTTP-CGI move ${direction} (${tpl.name})`);
   },
 
   async stop(camera) {
     const tpl = getTemplate(camera);
     if (!tpl) throw new Error(`No HTTP CGI template for camera ${camera.id}`);
-    const spec = tpl.stop(getBaseUrl(camera));
-    await doRequest(spec, getAuth(camera));
+
+    const baseUrl = getBaseUrl(camera);
+    const auth = getAuth(camera);
+    const channel = inferCloseLiChannel(camera);
+    const candidates = [baseUrl];
+    if (tpl === TEMPLATES.hi3510 && channel) {
+      const stripped = stripChannelSuffix(baseUrl, channel);
+      candidates.push(stripped);
+
+      const baseChannel = getBaseChannelVariant(channel);
+      if (baseChannel) {
+        candidates.push(ensureChannelPrefix(stripped, baseChannel));
+      }
+
+      candidates.push(withPort(stripped, 80));
+      if (baseChannel) {
+        candidates.push(withPort(ensureChannelPrefix(withPort(stripped, 80), baseChannel), 80));
+      }
+      candidates.push(withPort(baseUrl, 80));
+    }
+
+    let lastErr = null;
+    const attempts = [];
+    for (const b of candidates.filter(Boolean)) {
+      try {
+        const spec = tpl.stop(b);
+        await doRequest(spec, auth);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        try {
+          const spec = tpl.stop(b);
+          attempts.push({ url: spec.url, error: formatAttemptError(err) });
+        } catch {
+          attempts.push({ url: String(b), error: formatAttemptError(err) });
+        }
+        const status = getErrorHttpStatus(err);
+        if (tpl === TEMPLATES.hi3510 && (status === 404 || isRetryableHi3510Error(err))) {
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (lastErr) {
+      const msg = `HTTP-CGI stop failed (${tpl.name}). Tried: ${attempts.map((a) => `${a.url} => ${a.error}`).join(' | ')}`;
+      throw new Error(msg, { cause: lastErr });
+    }
     log('info', `[${camera.id}] HTTP-CGI stop`);
   },
 
   async zoom(camera, mode) {
     const tpl = getTemplate(camera);
     if (!tpl) throw new Error(`No HTTP CGI template for camera ${camera.id}`);
-    const spec = tpl.zoom(getBaseUrl(camera), mode);
-    await doRequest(spec, getAuth(camera));
+
+    const baseUrl = getBaseUrl(camera);
+    const auth = getAuth(camera);
+    const channel = inferCloseLiChannel(camera);
+    const candidates = [baseUrl];
+    if (tpl === TEMPLATES.hi3510 && channel) {
+      const stripped = stripChannelSuffix(baseUrl, channel);
+      candidates.push(stripped);
+
+      const baseChannel = getBaseChannelVariant(channel);
+      if (baseChannel) {
+        candidates.push(ensureChannelPrefix(stripped, baseChannel));
+      }
+
+      candidates.push(withPort(stripped, 80));
+      if (baseChannel) {
+        candidates.push(withPort(ensureChannelPrefix(withPort(stripped, 80), baseChannel), 80));
+      }
+      candidates.push(withPort(baseUrl, 80));
+    }
+
+    let lastErr = null;
+    const attempts = [];
+    for (const b of candidates.filter(Boolean)) {
+      try {
+        const spec = tpl.zoom(b, mode);
+        await doRequest(spec, auth);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        try {
+          const spec = tpl.zoom(b, mode);
+          attempts.push({ url: spec.url, error: formatAttemptError(err) });
+        } catch {
+          attempts.push({ url: String(b), error: formatAttemptError(err) });
+        }
+        const status = getErrorHttpStatus(err);
+        if (tpl === TEMPLATES.hi3510 && (status === 404 || isRetryableHi3510Error(err))) {
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (lastErr) {
+      const msg = `HTTP-CGI zoom ${mode} failed (${tpl.name}). Tried: ${attempts.map((a) => `${a.url} => ${a.error}`).join(' | ')}`;
+      throw new Error(msg, { cause: lastErr });
+    }
     log('info', `[${camera.id}] HTTP-CGI zoom ${mode}`);
   },
 
