@@ -22,6 +22,7 @@ import { scanNetwork, probeCloseLiChannels } from './discovery/networkScanner.js
 import { detectUsbCameras } from './discovery/usbDetector.js';
 import { getSystemStreamsInfo } from './streamGuard.js';
 import { startAutoUpdate, checkForUpdates, getUpdateStatus } from './autoUpdate.js';
+import { syncAllCameras, syncCameraTime } from './closeli/timeSync.js';
 
 const PORT = process.env.GATEWAY_PORT || 5055;
 const app = express();
@@ -711,6 +712,18 @@ app.get('/api/metrics', (req, res) => {
   });
 });
 
+// ─── Camera Time Sync ───────────────────────────────────────────
+
+app.post('/api/cameras/sync-time', async (req, res) => {
+  const { ip } = req.body || {};
+  if (ip) {
+    const result = await syncCameraTime(ip);
+    return res.json(result);
+  }
+  const results = await syncAllCameras(cameraStore);
+  res.json({ success: true, results });
+});
+
 // ─── Auto Update ────────────────────────────────────────────────────
 
 app.get('/api/update/status', (req, res) => {
@@ -800,4 +813,9 @@ app.listen(PORT, () => {
 
   // Start auto-update checker
   startAutoUpdate();
+
+  // Sync CloseLi cameras clock to server time (after 10s to let cameras boot)
+  setTimeout(() => {
+    syncAllCameras(cameraStore).catch(() => {});
+  }, 10_000);
 });
