@@ -754,6 +754,9 @@ const _healthTimer = setInterval(() => {
     // Skip streams that are not supposed to be running
     if (!stream || stream.state === 'stopped' || stream.healthStatus === 'failed') continue;
 
+    // Skip live proxy streams — they manage their own FFmpeg lifecycle
+    if (stream._liveProxy) continue;
+
     // Skip streams still starting up (give them 15s grace)
     const startAge = now - new Date(stream.startedAt).getTime();
     if (stream.state === 'starting' && startAge < 15_000) continue;

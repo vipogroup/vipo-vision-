@@ -18,7 +18,8 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
   const [isRecording, setIsRecording] = useState(false);
   const [recLoading, setRecLoading] = useState(false);
   const lastStreamModeRef = useRef(null);
-  const [webrtcFailed, setWebrtcFailed] = useState(false);
+  const [webrtcFailed, setWebrtcFailed] = useState(true); // default to HLS — WebRTC enabled only if MediaMTX is confirmed available
+  const webrtcCheckedRef = useRef(false);
   const [rotation, setRotation] = useState(() => {
     try { return parseInt(localStorage.getItem(`cam-rot-${camera.id}`)) || 0; } catch { return 0; }
   });
@@ -54,7 +55,17 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
     const startStream = async () => {
       setStreamLoading(true);
       setHlsUrl(null);
-      setWebrtcFailed(false);
+      // Check MediaMTX availability once, then remember result
+      if (!webrtcCheckedRef.current) {
+        webrtcCheckedRef.current = true;
+        try {
+          const mtxRes = await fetch(`${GATEWAY_BASE}/api/streams/diagnostics`, { signal: controller.signal });
+          const mtxData = await mtxRes.json();
+          // If any stream has WebRTC available, enable it
+          const hasWebrtc = Array.isArray(mtxData) && mtxData.some(s => s.encoder === 'live_transcode' || s.inputType === 'tcp_live');
+          if (!hasWebrtc) setWebrtcFailed(true);
+        } catch { /* keep HLS default */ }
+      }
 
       if (shouldStopFirst) {
         try {

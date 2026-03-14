@@ -214,6 +214,9 @@ function watchdogTick() {
   for (const [cameraId, entry] of processRegistry) {
     if (entry.state === 'restarting' || entry.state === 'dead' || entry.state === 'stopped') continue;
 
+    // Skip live proxy streams — they manage their own FFmpeg lifecycle
+    if (entry.encoder === 'live' && !entry.pid) continue;
+
     // Check 1: Is the FFmpeg process still alive?
     if (entry.pid && !isProcessAlive(entry.pid)) {
       log('warn', `[StreamGuard] Watchdog: FFmpeg process ${entry.pid} for ${cameraId} is dead`);
