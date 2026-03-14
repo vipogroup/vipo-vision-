@@ -174,11 +174,11 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false, forceLib
     }
   }
 
-  // [LOW-LATENCY TUNING] hls_time 1s, hls_list_size 3, omit_endlist keeps playlist live
+  // [STABLE] hls_time 2s, hls_list_size 6 — wider window to prevent 404 errors
   args.push(
     '-f', 'hls',
-    '-hls_time', '1',
-    '-hls_list_size', '3',
+    '-hls_time', '2',
+    '-hls_list_size', '6',
     '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
     '-hls_segment_filename', segmentPath,
     playlistPath,
