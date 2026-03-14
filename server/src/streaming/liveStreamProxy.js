@@ -263,7 +263,7 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       '-f', 'hls',
       '-hls_time', '2',
       '-hls_list_size', '6',
-      '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
+      '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time+independent_segments',
       '-hls_segment_filename', segPattern,
       hlsPath,
     ];

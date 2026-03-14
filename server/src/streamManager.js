@@ -179,7 +179,7 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false, forceLib
     '-f', 'hls',
     '-hls_time', '2',
     '-hls_list_size', '6',
-    '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
+    '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time+independent_segments',
     '-hls_segment_filename', segmentPath,
     playlistPath,
   );
