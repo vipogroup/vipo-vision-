@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { ChevronDown } from 'lucide-react';
 import CameraCard from './CameraCard';
 
@@ -10,6 +10,7 @@ const gridClasses = {
 };
 
 const STORAGE_KEY = 'vipo-slot-assignments';
+const CLOSE_EVENT = 'vipo-close-slot-selectors';
 
 function loadAssignments() {
   try {
@@ -19,11 +20,17 @@ function loadAssignments() {
 }
 
 function saveAssignments(assignments) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(assignments)); } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(assignments)); } catch (e) { void e; }
 }
 
 function SlotSelector({ slotIndex, cameras, assignedCameraId, onAssign }) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const onClose = () => setOpen(false);
+    window.addEventListener(CLOSE_EVENT, onClose);
+    return () => window.removeEventListener(CLOSE_EVENT, onClose);
+  }, []);
 
   return (
     <div className="absolute top-0.5 right-0.5 z-40">
@@ -70,14 +77,55 @@ export default function CameraGrid({ cameras, gridSize = 4, streamMode = 'hd' })
 
   // Close any open dropdown when clicking outside
   useEffect(() => {
-    const handler = () => {};
+    const handler = () => {
+      try {
+        window.dispatchEvent(new Event(CLOSE_EVENT));
+      } catch (e) { void e; }
+    };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, []);
 
+  const sortedCameras = useMemo(() => {
+    return (Array.isArray(cameras) ? cameras : [])
+      .slice()
+      .sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+  }, [cameras]);
+
+  const seededAssignments = useMemo(() => {
+    const seeded = {};
+    const max = Math.min(gridSize, sortedCameras.length);
+    for (let i = 0; i < max; i++) {
+      const cam = sortedCameras[i];
+      if (cam && cam.id) seeded[i] = cam.id;
+    }
+    return seeded;
+  }, [gridSize, sortedCameras]);
+
+  const storedAssignments = useMemo(() => {
+    const hasState = assignments && typeof assignments === 'object' && Object.keys(assignments).length > 0;
+    const saved = hasState ? assignments : loadAssignments();
+    return saved && typeof saved === 'object' ? saved : {};
+  }, [assignments]);
+
+  const effectiveAssignments = useMemo(() => {
+    return { ...seededAssignments, ...storedAssignments };
+  }, [seededAssignments, storedAssignments]);
+
+  useEffect(() => {
+    if (!sortedCameras.length) return;
+    const current = loadAssignments();
+    const merged = { ...seededAssignments, ...(current && typeof current === 'object' ? current : {}) };
+    const currentStr = JSON.stringify(current || {});
+    const mergedStr = JSON.stringify(merged);
+    if (currentStr === mergedStr) return;
+    saveAssignments(merged);
+  }, [seededAssignments, sortedCameras]);
+
   const handleAssign = useCallback((slotIndex, cameraId) => {
     setAssignments((prev) => {
-      const next = { ...prev };
+      const base = prev && Object.keys(prev).length > 0 ? prev : storedAssignments;
+      const next = { ...base };
       if (cameraId === null) {
         delete next[slotIndex];
       } else {
@@ -86,7 +134,7 @@ export default function CameraGrid({ cameras, gridSize = 4, streamMode = 'hd' })
       saveAssignments(next);
       return next;
     });
-  }, []);
+  }, [storedAssignments]);
 
   // Build the display list: for each slot, use manual assignment if set, otherwise auto-fill
   const slots = [];
@@ -94,21 +142,23 @@ export default function CameraGrid({ cameras, gridSize = 4, streamMode = 'hd' })
 
   // First pass: fill manually assigned slots
   for (let i = 0; i < gridSize; i++) {
-    const assignedId = assignments[i];
+    const assignedId = effectiveAssignments[i];
     if (assignedId) {
-      const cam = cameras.find((c) => c.id === assignedId);
+      const cam = sortedCameras.find((c) => c.id === assignedId);
       if (cam) {
         slots[i] = cam;
         usedIds.add(assignedId);
+      } else {
+        slots[i] = null;
       }
     }
   }
 
   // Second pass: auto-fill remaining slots with unassigned cameras
-  const unassigned = cameras.filter((c) => !usedIds.has(c.id));
+  const unassigned = sortedCameras.filter((c) => !usedIds.has(c.id));
   let autoIdx = 0;
   for (let i = 0; i < gridSize; i++) {
-    if (!slots[i]) {
+    if (slots[i] === undefined) {
       slots[i] = unassigned[autoIdx] || null;
       if (unassigned[autoIdx]) {
         usedIds.add(unassigned[autoIdx].id);
@@ -123,8 +173,8 @@ export default function CameraGrid({ cameras, gridSize = 4, streamMode = 'hd' })
         <div key={`slot-${idx}`} className="relative h-full">
           <SlotSelector
             slotIndex={idx}
-            cameras={cameras}
-            assignedCameraId={assignments[idx] || null}
+            cameras={sortedCameras}
+            assignedCameraId={effectiveAssignments[idx] || null}
             onAssign={handleAssign}
           />
           {camera ? (
