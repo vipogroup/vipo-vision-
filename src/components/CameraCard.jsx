@@ -9,9 +9,17 @@ import WebRtcPlayer from './WebRtcPlayer';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { GATEWAY_BASE } from '../config';
 
+// ─── DEBUG: render counter per camera instance ──────────────────
+const DEBUG_OVERLAY = true; // set false to hide debug overlay
+let _instanceCounter = 0;
+
 export default function CameraCard({ camera, compact = false, fillHeight = false, streamMode = 'hd' }) {
   const navigate = useNavigate();
   const telemetry = useTelemetry(camera.id);
+  const renderCountRef = useRef(0);
+  const instanceIdRef = useRef(++_instanceCounter);
+  const hlsAttachTimeRef = useRef(null);
+  renderCountRef.current++;
   const [showMiniPTZ, setShowMiniPTZ] = useState(false);
   const [hlsUrl, setHlsUrl] = useState(null);
   const [streamLoading, setStreamLoading] = useState(false);
@@ -105,16 +113,22 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
           const statusRes = await fetch(`${GATEWAY_BASE}/api/streams/status/${camera.id}`, { signal: controller.signal });
           const status = await statusRes.json();
           if (status.state === 'running') {
-            if (!cancelled) setHlsUrl(`${GATEWAY_BASE}${status.hlsUrl || hlsPath}`);
+            const finalUrl = `${GATEWAY_BASE}${status.hlsUrl || hlsPath}`;
+            console.log(`[PLAYER ${camera.id}] HLS URL set: ${finalUrl}`);
+            hlsAttachTimeRef.current = new Date().toISOString();
+            if (!cancelled) setHlsUrl(finalUrl);
             break;
           }
-          if (status.state === 'error') break;
+          if (status.state === 'error') { console.warn(`[PLAYER ${camera.id}] Stream error from backend`); break; }
         } catch { /* retry */ }
       }
       if (!cancelled) setStreamLoading(false);
     };
+    const instId = instanceIdRef.current;
+    console.log(`[PLAYER ${camera.id}] useEffect FIRED — status=${camera.status}, mode=${streamMode}, inst=${instId}`);
     startStream();
     return () => {
+      console.log(`[PLAYER ${camera.id}] useEffect CLEANUP — inst=${instId}`);
       cancelled = true;
       controller.abort();
     };
@@ -154,12 +168,22 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
                   streamId={camera.id}
                   autoplay
                   muted
-                  onError={() => setWebrtcFailed(true)}
+                  onError={() => { console.warn(`[PLAYER ${camera.id}] WebRTC FAILED → fallback HLS`); setWebrtcFailed(true); }}
                 />
               ) : (
-                <HlsPlayer hlsUrl={hlsUrl} autoplay muted />
+                <HlsPlayer hlsUrl={hlsUrl} autoplay muted cameraId={camera.id} />
               )}
             </div>
+            {DEBUG_OVERLAY && (
+              <div className="absolute top-7 left-1 z-50 bg-black/80 text-[8px] font-mono text-green-400 px-1.5 py-1 rounded pointer-events-none leading-tight max-w-[180px]">
+                <div>id: {camera.id}</div>
+                <div>inst: #{instanceIdRef.current}</div>
+                <div>proto: {webrtcFailed ? 'HLS' : 'WebRTC'}</div>
+                <div className="truncate">src: {hlsUrl?.split('/hls/')[1] || '?'}</div>
+                <div>renders: {renderCountRef.current}</div>
+                <div>attach: {hlsAttachTimeRef.current?.slice(11,19) || '-'}</div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center">

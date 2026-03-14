@@ -234,9 +234,8 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
   fs.mkdirSync(hlsOutputDir, { recursive: true });
 
   let foundSps = false;
-  let spsBuffer = Buffer.alloc(0); // accumulate until SPS+PPS+IDR
-  let lastSpsNal = null;
-  let lastPpsNal = null;
+  // NOTE: spsBuffer/lastSpsNal/lastPpsNal are now per-callback (inside makeNalCallback)
+  // to avoid mixing NAL data from different quality streams
 
   let nvencFailed = false; // Track if NVENC failed so we can fallback to CPU
 
@@ -262,8 +261,8 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       '-bsf:v', 'dump_extra',
       '-an',
       '-f', 'hls',
-      '-hls_time', '1',
-      '-hls_list_size', '3',
+      '-hls_time', '2',
+      '-hls_list_size', '6',
       '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
       '-hls_segment_filename', segPattern,
       hlsPath,
@@ -358,75 +357,91 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     return ffmpeg;
   }
 
-  // NAL data callback — called by the shared connection for our channel
-  const onNalData = (nalBuf) => {
-    if (state.status === 'stopped') return;
+  // lockedField3: once SPS is found, only accept data from this field3
+  let lockedField3 = -1;
 
-    if (!foundSps) {
-      spsBuffer = Buffer.concat([spsBuffer, nalBuf]);
-      if (spsBuffer.length > 2 * 1024 * 1024) {
-        spsBuffer = spsBuffer.slice(spsBuffer.length - 1024 * 1024);
-      }
+  // NAL data callback factory — each field3 gets its own SPS buffer
+  // to avoid mixing NAL data from different quality streams.
+  // They share foundSps/lockedField3 so only the first to find SPS wins.
+  const makeNalCallback = (sourceF3) => {
+    // Per-callback SPS detection state (isolated per quality stream)
+    let mySpsBuffer = Buffer.alloc(0);
+    let myLastSpsNal = null;
+    let myLastPpsNal = null;
 
-      // Find NAL start codes: both 00 00 00 01 (4-byte) and 00 00 01 (3-byte)
-      const starts = [];
-      for (let i = 0; i <= spsBuffer.length - 3; i++) {
-        if (spsBuffer[i] === 0 && spsBuffer[i + 1] === 0) {
-          if (i + 3 < spsBuffer.length && spsBuffer[i + 2] === 0 && spsBuffer[i + 3] === 1) {
-            starts.push({ pos: i, len: 4 }); // 4-byte start code
-            i += 3;
-          } else if (spsBuffer[i + 2] === 1) {
-            starts.push({ pos: i, len: 3 }); // 3-byte start code
-            i += 2;
+    return (nalBuf) => {
+      if (state.status === 'stopped') return;
+      // After SPS found, only accept data from the locked field3
+      if (lockedField3 >= 0 && sourceF3 !== lockedField3) return;
+
+      if (!foundSps) {
+        mySpsBuffer = Buffer.concat([mySpsBuffer, nalBuf]);
+        if (mySpsBuffer.length > 2 * 1024 * 1024) {
+          mySpsBuffer = mySpsBuffer.slice(mySpsBuffer.length - 1024 * 1024);
+        }
+
+        // Find NAL start codes: both 00 00 00 01 (4-byte) and 00 00 01 (3-byte)
+        const starts = [];
+        for (let i = 0; i <= mySpsBuffer.length - 3; i++) {
+          if (mySpsBuffer[i] === 0 && mySpsBuffer[i + 1] === 0) {
+            if (i + 3 < mySpsBuffer.length && mySpsBuffer[i + 2] === 0 && mySpsBuffer[i + 3] === 1) {
+              starts.push({ pos: i, len: 4 }); // 4-byte start code
+              i += 3;
+            } else if (mySpsBuffer[i + 2] === 1) {
+              starts.push({ pos: i, len: 3 }); // 3-byte start code
+              i += 2;
+            }
           }
         }
-      }
 
-      if (starts.length < 2) {
+        if (starts.length < 2) {
+          state.status = 'buffering';
+          return;
+        }
+
+        for (let s = 0; s < starts.length - 1; s++) {
+          const start = starts[s].pos;
+          const nalOffset = start + starts[s].len;
+          const end = starts[s + 1].pos;
+          if (nalOffset >= mySpsBuffer.length) continue;
+          const nalType = mySpsBuffer[nalOffset] & 0x1f;
+
+          if (nalType === NAL_TYPE_SPS) {
+            myLastSpsNal = mySpsBuffer.slice(start, end);
+          } else if (nalType === 8) {
+            myLastPpsNal = mySpsBuffer.slice(start, end);
+          } else if (nalType === 5 && myLastSpsNal && myLastPpsNal) {
+            foundSps = true;
+            lockedField3 = sourceF3;
+            currentField3 = sourceF3;
+            log('info', `[${streamId}] Found SPS/PPS/IDR for channel ${channel} (field3=${sourceF3})`);
+            state.ffmpeg = startFfmpeg();
+            try {
+              if (state.ffmpeg && state.ffmpeg.stdin.writable) {
+                state.ffmpeg.stdin.write(myLastSpsNal);
+                state.ffmpeg.stdin.write(myLastPpsNal);
+                state.ffmpeg.stdin.write(mySpsBuffer.slice(start));
+              }
+            } catch (writeErr) { /* pipe may have closed */ }
+            state.status = 'streaming';
+            state.frameCount++;
+            mySpsBuffer = Buffer.alloc(0);
+            return;
+          }
+        }
+
         state.status = 'buffering';
         return;
       }
 
-      for (let s = 0; s < starts.length - 1; s++) {
-        const start = starts[s].pos;
-        const nalOffset = start + starts[s].len;
-        const end = starts[s + 1].pos;
-        if (nalOffset >= spsBuffer.length) continue;
-        const nalType = spsBuffer[nalOffset] & 0x1f;
-
-        if (nalType === NAL_TYPE_SPS) {
-          lastSpsNal = spsBuffer.slice(start, end);
-        } else if (nalType === 8) {
-          lastPpsNal = spsBuffer.slice(start, end);
-        } else if (nalType === 5 && lastSpsNal && lastPpsNal) {
-          foundSps = true;
-          log('info', `[${streamId}] Found SPS/PPS/IDR for channel ${channel} (field3=${currentField3})`);
-          state.ffmpeg = startFfmpeg();
-          try {
-            if (state.ffmpeg && state.ffmpeg.stdin.writable) {
-              state.ffmpeg.stdin.write(lastSpsNal);
-              state.ffmpeg.stdin.write(lastPpsNal);
-              state.ffmpeg.stdin.write(spsBuffer.slice(start));
-            }
-          } catch (writeErr) { /* pipe may have closed */ }
-          state.status = 'streaming';
+      // Stream is running — pipe data to FFmpeg
+      if (state.ffmpeg && state.ffmpeg.stdin.writable) {
+        try {
+          state.ffmpeg.stdin.write(nalBuf);
           state.frameCount++;
-          spsBuffer = Buffer.alloc(0);
-          return;
-        }
+        } catch (writeErr) { /* pipe may have closed */ }
       }
-
-      state.status = 'buffering';
-      return;
-    }
-
-    // Stream is running — pipe data to FFmpeg
-    if (state.ffmpeg && state.ffmpeg.stdin.writable) {
-      try {
-        state.ffmpeg.stdin.write(nalBuf);
-        state.frameCount++;
-      } catch (writeErr) { /* pipe may have closed */ }
-    }
+    };
   };
 
   // Get or create shared connection
@@ -434,11 +449,16 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
 
   let currentField3 = mainField3;
 
+  // Track all registered callbacks for cleanup
+  const registeredCallbacks = new Map(); // field3 → callback
+
   function registerConsumer(f3) {
+    const cb = makeNalCallback(f3);
+    registeredCallbacks.set(f3, cb);
     if (!conn.consumers.has(f3)) {
       conn.consumers.set(f3, new Set());
     }
-    conn.consumers.get(f3).add(onNalData);
+    conn.consumers.get(f3).add(cb);
     currentField3 = f3;
 
     // Replay early buffered data (contains SPS/PPS from connection start)
@@ -447,7 +467,7 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       const totalBytes = earlyBuf.reduce((s, b) => s + b.length, 0);
       log('info', `[${streamId}] Replaying ${earlyBuf.length} early packets (${totalBytes} bytes) for field3=${f3}`);
       for (const chunk of earlyBuf) {
-        onNalData(chunk);
+        cb(chunk);
       }
       conn.earlyBuffers.delete(f3); // clear after replay
     }
@@ -455,32 +475,29 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     log('info', `[${streamId}] Registered for channel ${channel} (field3=${f3}) on shared connection`);
   }
 
-  registerConsumer(mainField3);
-
-  // Fallback: if no SPS found within 15s, try sub/thumbnail quality
-  const fallbacks = CHANNEL_FALLBACKS[mainField3];
-  let fallbackTimer = null;
-  if (fallbacks && fallbacks.length > 0) {
-    let fbIdx = 0;
-    fallbackTimer = setInterval(() => {
-      if (foundSps || state.status === 'stopped' || fbIdx >= fallbacks.length) {
-        clearInterval(fallbackTimer);
-        return;
-      }
-      log('info', `[${streamId}] No SPS on field3=${currentField3} after timeout, trying fallback field3=${fallbacks[fbIdx]}`);
-      // Unregister current
-      const cbs = conn.consumers.get(currentField3);
-      if (cbs) { cbs.delete(onNalData); if (cbs.size === 0) conn.consumers.delete(currentField3); }
-      // Reset SPS search
-      foundSps = false;
-      spsBuffer = Buffer.alloc(0);
-      lastSpsNal = null;
-      lastPpsNal = null;
-      // Register for fallback
-      registerConsumer(fallbacks[fbIdx]);
-      fbIdx++;
-    }, 5000);
+  // Register on ALL candidate field3 values simultaneously (main + fallbacks)
+  // This catches SPS/PPS from whichever quality stream sends it first
+  const allField3s = [mainField3, ...(CHANNEL_FALLBACKS[mainField3] || [])];
+  for (const f3 of allField3s) {
+    registerConsumer(f3);
   }
+  log('info', `[${streamId}] Listening on field3 values: [${allField3s.join(', ')}] for channel ${channel}`);
+
+  // Once SPS is found and FFmpeg started, unregister from non-active field3s (cleanup timer)
+  let fallbackTimer = setInterval(() => {
+    if (state.status === 'stopped') { clearInterval(fallbackTimer); return; }
+    if (foundSps) {
+      clearInterval(fallbackTimer);
+      // Unregister from all except the locked one
+      for (const [f3, cb] of registeredCallbacks) {
+        if (f3 === lockedField3) continue;
+        const cbs = conn.consumers.get(f3);
+        if (cbs) { cbs.delete(cb); if (cbs.size === 0) conn.consumers.delete(f3); }
+        registeredCallbacks.delete(f3);
+      }
+      log('info', `[${streamId}] SPS found on field3=${lockedField3}, unregistered from others`);
+    }
+  }, 2000);
 
   return {
     get status() { return state.status; },
@@ -491,7 +508,18 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     stop() {
       state.status = 'stopped';
       if (fallbackTimer) clearInterval(fallbackTimer);
-      releaseSharedConnection(conn, currentField3, onNalData);
+      // Unregister all callbacks from shared connection
+      for (const [f3, cb] of registeredCallbacks) {
+        const cbs = conn.consumers.get(f3);
+        if (cbs) { cbs.delete(cb); if (cbs.size === 0) conn.consumers.delete(f3); }
+      }
+      registeredCallbacks.clear();
+      conn.refCount--;
+      if (conn.refCount <= 0 && conn.socket) {
+        conn.socket.destroy();
+        sharedConnections.delete(conn.key);
+        log('info', `[shared-${conn.key}] Last consumer left, connection closed`);
+      }
       if (state.ffmpeg) {
         state.ffmpeg.stdin.end();
         state.ffmpeg.kill('SIGTERM');
