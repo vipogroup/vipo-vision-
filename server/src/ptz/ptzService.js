@@ -7,6 +7,7 @@
 
 import { onvifAdapter } from './adapters/onvifAdapter.js';
 import { httpCgiAdapter } from './adapters/httpCgiAdapter.js';
+import { telnetMotorAdapter } from './adapters/telnetMotorAdapter.js';
 import { log } from '../sanitize.js';
 
 const lastMove = new Map();
@@ -18,6 +19,8 @@ function getAdapter(camera) {
       return onvifAdapter;
     case 'http_cgi':
       return httpCgiAdapter;
+    case 'closeli-motor':
+      return telnetMotorAdapter;
     default:
       return null;
   }
@@ -78,6 +81,15 @@ export const ptzService = {
     if (!adapter) throw new Error(`PTZ not available for camera ${camera.id}`);
 
     await adapter.deletePreset(camera, presetId);
+  },
+
+  async getStatus(camera) {
+    const adapter = getAdapter(camera);
+    if (!adapter) throw new Error(`PTZ not available for camera ${camera.id}`);
+    if (typeof adapter.getStatus !== 'function') {
+      return { pan: 0, tilt: 0, zoom: 0, adapter: camera.ptzType || 'unknown' };
+    }
+    return await adapter.getStatus(camera);
   },
 
   getLastMove(cameraId) {

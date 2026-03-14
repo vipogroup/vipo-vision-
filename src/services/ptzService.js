@@ -17,7 +17,7 @@ function getCameraById(cameraId) {
 }
 
 function isRealPtz(camera) {
-  return camera?.ptzType === 'onvif' || camera?.ptzType === 'http_cgi';
+  return camera?.ptzType === 'onvif' || camera?.ptzType === 'http_cgi' || camera?.ptzType === 'closeli-motor';
 }
 
 function adapterFor(cameraId) {

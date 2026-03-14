@@ -5,6 +5,7 @@ import StatusBadge from './StatusBadge';
 import TelemetryBadge from './TelemetryBadge';
 import PTZMiniPanel from './PTZMiniPanel';
 import HlsPlayer from './HlsPlayer';
+import WebRtcPlayer from './WebRtcPlayer';
 import { useTelemetry } from '../hooks/useTelemetry';
 import { GATEWAY_BASE } from '../config';
 
@@ -17,6 +18,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
   const [isRecording, setIsRecording] = useState(false);
   const [recLoading, setRecLoading] = useState(false);
   const lastStreamModeRef = useRef(null);
+  const [webrtcFailed, setWebrtcFailed] = useState(false);
   const [rotation, setRotation] = useState(() => {
     try { return parseInt(localStorage.getItem(`cam-rot-${camera.id}`)) || 0; } catch { return 0; }
   });
@@ -52,6 +54,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
     const startStream = async () => {
       setStreamLoading(true);
       setHlsUrl(null);
+      setWebrtcFailed(false);
 
       if (shouldStopFirst) {
         try {
@@ -135,7 +138,16 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
         {isLive ? (
           <div className="w-full h-full overflow-hidden flex items-center justify-center">
             <div style={{ transform: videoTransform, width: is90 ? '100%' : '100%', height: is90 ? '100%' : '100%', transformOrigin: 'center center', ...(is90 ? { aspectRatio: 'auto' } : {}) }} className={is90 ? 'scale-[0.56] sm:scale-75' : 'w-full h-full'}>
-              <HlsPlayer hlsUrl={hlsUrl} autoplay muted />
+              {!webrtcFailed ? (
+                <WebRtcPlayer
+                  streamId={camera.id}
+                  autoplay
+                  muted
+                  onError={() => setWebrtcFailed(true)}
+                />
+              ) : (
+                <HlsPlayer hlsUrl={hlsUrl} autoplay muted />
+              )}
             </div>
           </div>
         ) : (
@@ -190,7 +202,7 @@ export default function CameraCard({ camera, compact = false, fillHeight = false
                 <span className={`text-[8px] sm:text-[9px] font-semibold ${
                   streamMode === 'hd' ? 'text-purple-400' : 'text-orange-400'
                 }`}>
-                  {streamMode === 'hd' ? 'HD' : 'LIVE'}
+                  {streamMode === 'hd' ? 'HD' : 'LIVE'}{isLive ? (webrtcFailed ? ' HLS' : ' WebRTC') : ''}
                 </span>
               </div>
             )}

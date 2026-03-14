@@ -21,6 +21,21 @@ import { getLiveTranscodeArgs } from '../gpuDetect.js';
 
 const NAL_TYPE_SPS = 7;
 
+// ─── MediaMTX WebRTC integration ─────────────────────────────────
+const MEDIAMTX_RTSP_URL = process.env.MEDIAMTX_RTSP_URL || 'rtsp://127.0.0.1:8554';
+const MEDIAMTX_RTSP_PORT = Number(process.env.MEDIAMTX_RTSP_PORT || 8554);
+
+function checkMediaMtxLive() {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(1500);
+    socket.on('connect', () => { socket.destroy(); resolve(true); });
+    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+    socket.on('error', () => { socket.destroy(); resolve(false); });
+    socket.connect(MEDIAMTX_RTSP_PORT, '127.0.0.1');
+  });
+}
+
 // ─── Shared connection manager ────────────────────────────────────
 // One TCP connection per camera IP, with multiple channel consumers.
 const sharedConnections = new Map(); // cameraIp:port → { socket, consumers: Map<channelField3, Set<callback>> }
@@ -192,6 +207,17 @@ function releaseSharedConnection(conn, field3, callback) {
 const CHANNEL_TO_FIELD3 = [0, 3, 6, 9];
 const CHANNEL_FALLBACKS = { 0: [1, 2], 3: [4, 5], 6: [7, 8], 9: [10, 11] };
 
+// Cached MediaMTX availability for live streams
+let _mediaMtxLiveAvailable = false;
+(async () => {
+  _mediaMtxLiveAvailable = await checkMediaMtxLive();
+  log('info', `[LiveProxy] MediaMTX WebRTC relay ${_mediaMtxLiveAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
+})();
+const _mtxLiveCheckTimer = setInterval(async () => {
+  _mediaMtxLiveAvailable = await checkMediaMtxLive();
+}, 30_000);
+if (typeof _mtxLiveCheckTimer.unref === 'function') _mtxLiveCheckTimer.unref();
+
 export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hlsOutputDir, streamId, fps = 25 }) {
   const mainField3 = CHANNEL_TO_FIELD3[channel] ?? (channel * 3); // use lookup, fallback to channel*3
 
@@ -248,6 +274,41 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       '-hls_segment_filename', segPattern,
       hlsPath,
     ];
+
+    // ─── WebRTC: push copy to MediaMTX via RTSP ──────────────────
+    // Check synchronously using cached value (set below)
+    if (_mediaMtxLiveAvailable) {
+      args.push(
+        '-c:v', 'copy',
+        '-an',
+        '-f', 'rtsp',
+        '-rtsp_transport', 'tcp',
+        `${MEDIAMTX_RTSP_URL}/${streamId}`,
+      );
+      log('info', `[${streamId}] WebRTC: pushing live to ${MEDIAMTX_RTSP_URL}/${streamId}`);
+    }
+
+    // ─── Continuous recording to local disk ────────────────────────
+    const autoRecEnabled = (process.env.AUTO_RECORD || 'true') !== 'false';
+    const autoRecSegSec = Number(process.env.AUTO_RECORD_SEGMENT_SEC || 900);
+    if (autoRecEnabled) {
+      const recRoot = path.resolve(process.env.RECORDINGS_PATH || 'recordings');
+      const recDir = path.join(recRoot, streamId);
+      fs.mkdirSync(recDir, { recursive: true });
+      const recPattern = path.join(recDir, `${streamId}_%Y-%m-%d_%H-%M-%S.mp4`);
+      args.push(
+        '-c:v', 'copy',
+        '-an',
+        '-f', 'segment',
+        '-segment_time', String(autoRecSegSec),
+        '-segment_format', 'mp4',
+        '-reset_timestamps', '1',
+        '-strftime', '1',
+        '-movflags', '+frag_keyframe',
+        recPattern,
+      );
+      log('info', `[${streamId}] Auto-recording live: ${autoRecSegSec}s segments → ${recDir}`);
+    }
 
     log('info', `[${streamId}] Starting FFmpeg for channel ${channel} (transcode mode)`);
     const ffmpeg = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });

@@ -171,9 +171,32 @@ router.delete('/:cameraId/presets/:presetId', async (req, res) => {
 
 // ─── Status ─────────────────────────────────────────────────────────
 
-router.get('/:cameraId/status', (req, res) => {
+router.get('/:cameraId/status', async (req, res) => {
   const camera = getCamera(req, res);
   if (!camera) return;
+
+  // For closeli-motor cameras, fetch real motor status
+  if (camera.ptzType === 'closeli-motor') {
+    try {
+      const status = await ptzService.getStatus(camera);
+      return res.json({
+        success: true,
+        ptzAvailable: true,
+        ptzType: 'closeli-motor',
+        lastMove: ptzService.getLastMove(camera.id),
+        ...status,
+      });
+    } catch (err) {
+      log('error', `[${camera.id}] Motor status error: ${err.message}`);
+      return res.json({
+        success: false,
+        ptzAvailable: true,
+        ptzType: 'closeli-motor',
+        lastMove: ptzService.getLastMove(camera.id),
+        message: err.message,
+      });
+    }
+  }
 
   res.json({
     success: true,

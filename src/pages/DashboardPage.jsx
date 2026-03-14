@@ -15,7 +15,7 @@ const gridOptions = [
 export default function DashboardPage() {
   const { t } = useLanguage();
   const [gridSize, setGridSize] = useState(4);
-  const [streamMode, setStreamMode] = useState('hd'); // 'hd' or 'live'
+  const [streamMode, setStreamMode] = useState('live'); // 'hd' or 'live'
   const { cameras } = useCameraStore();
 
   const [isFullscreen, setIsFullscreen] = useState(false);

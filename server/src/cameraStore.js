@@ -89,6 +89,7 @@ export const cameraStore = {
       ptzType: camera.ptzType || 'none',
       onvif: camera.onvif || null,
       httpCgi: camera.httpCgi || null,
+      motorConfig: camera.motorConfig || null,
       liveChannel: camera.liveChannel ?? null,
       addedAt: new Date().toISOString(),
     };

@@ -9,6 +9,7 @@
  */
 
 import { spawn } from 'child_process';
+import net from 'net';
 import fs from 'fs';
 import path from 'path';
 import { sanitizeUrl, log } from './sanitize.js';
@@ -20,10 +21,45 @@ import { canStartStream, registerProcess, unregisterProcess, resetRestartCount, 
 detectNvenc();
 
 const HLS_ROOT = path.resolve('hls');
-const RECORDINGS_ROOT = path.resolve('recordings');
+const RECORDINGS_ROOT = path.resolve(process.env.RECORDINGS_PATH || 'recordings');
+
+// ─── Continuous Auto-Recording ───────────────────────────────────
+const AUTO_RECORD_ENABLED = (process.env.AUTO_RECORD || 'true') !== 'false';
+const AUTO_RECORD_SEGMENT_SEC = Number(process.env.AUTO_RECORD_SEGMENT_SEC || 900); // 15 min
+const AUTO_RECORD_RETENTION_DAYS = Number(process.env.AUTO_RECORD_RETENTION_DAYS || 7);
 const activeStreams = new Map();
 const activeRecordings = new Map(); // cameraId → { process, filePath, startedAt }
 const closeLiMeta = new Map(); // cameraId → { ip, port, channel, lastFile } for auto-restart
+
+// ─── MediaMTX WebRTC integration ─────────────────────────────────
+const MEDIAMTX_RTSP_URL = process.env.MEDIAMTX_RTSP_URL || 'rtsp://127.0.0.1:8554';
+const MEDIAMTX_RTSP_PORT = Number(process.env.MEDIAMTX_RTSP_PORT || 8554);
+let mediaMtxAvailable = false;
+
+function checkMediaMtx() {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(1500);
+    socket.on('connect', () => { socket.destroy(); resolve(true); });
+    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+    socket.on('error', () => { socket.destroy(); resolve(false); });
+    socket.connect(MEDIAMTX_RTSP_PORT, '127.0.0.1');
+  });
+}
+
+// Check MediaMTX availability on startup and periodically
+(async () => {
+  mediaMtxAvailable = await checkMediaMtx();
+  log('info', `[MediaMTX] WebRTC relay ${mediaMtxAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'} at ${MEDIAMTX_RTSP_URL}`);
+})();
+const _mtxCheckTimer = setInterval(async () => {
+  const was = mediaMtxAvailable;
+  mediaMtxAvailable = await checkMediaMtx();
+  if (was !== mediaMtxAvailable) {
+    log('info', `[MediaMTX] WebRTC relay ${mediaMtxAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}`);
+  }
+}, 30_000);
+if (typeof _mtxCheckTimer.unref === 'function') _mtxCheckTimer.unref();
 
 const STREAM_IDLE_TTL_LIVE_MS = Number(process.env.STREAM_IDLE_TTL_LIVE_MS || 90_000);
 const STREAM_IDLE_TTL_HTTP_MS = Number(process.env.STREAM_IDLE_TTL_HTTP_MS || 180_000);
@@ -147,6 +183,37 @@ function buildFfmpegArgs(inputUrl, hlsDir, cameraId, transcode = false, forceLib
     '-hls_segment_filename', segmentPath,
     playlistPath,
   );
+
+  // ─── WebRTC: push copy to MediaMTX via RTSP ──────────────────
+  if (mediaMtxAvailable) {
+    args.push(
+      '-c:v', 'copy',
+      '-an',
+      '-f', 'rtsp',
+      '-rtsp_transport', 'tcp',
+      `${MEDIAMTX_RTSP_URL}/${cameraId}`,
+    );
+    log('info', `[${cameraId}] WebRTC: pushing to ${MEDIAMTX_RTSP_URL}/${cameraId}`);
+  }
+
+  // ─── Continuous recording to local disk ────────────────────────
+  if (AUTO_RECORD_ENABLED) {
+    const recDir = path.join(RECORDINGS_ROOT, cameraId);
+    ensureDir(recDir);
+    const recPattern = path.join(recDir, `${cameraId}_%Y-%m-%d_%H-%M-%S.mp4`);
+    args.push(
+      '-c:v', 'copy',
+      '-an',
+      '-f', 'segment',
+      '-segment_time', String(AUTO_RECORD_SEGMENT_SEC),
+      '-segment_format', 'mp4',
+      '-reset_timestamps', '1',
+      '-strftime', '1',
+      '-movflags', '+frag_keyframe',
+      recPattern,
+    );
+    log('info', `[${cameraId}] Auto-recording: ${AUTO_RECORD_SEGMENT_SEC}s segments → ${recDir}`);
+  }
 
   return { args, playlistPath };
 }
@@ -824,4 +891,48 @@ function toRecPublic(rec) {
     startedAt: rec.startedAt,
     error: rec.error,
   };
+}
+
+// ─── Auto-Recording Retention Cleanup ──────────────────────────
+// Runs every hour, deletes recording files older than AUTO_RECORD_RETENTION_DAYS.
+if (AUTO_RECORD_ENABLED && AUTO_RECORD_RETENTION_DAYS > 0) {
+  const _retentionTimer = setInterval(() => {
+    const maxAgeMs = AUTO_RECORD_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let deleted = 0;
+
+    try {
+      if (!fs.existsSync(RECORDINGS_ROOT)) return;
+      const cameraDirs = fs.readdirSync(RECORDINGS_ROOT);
+
+      for (const dir of cameraDirs) {
+        const dirPath = path.join(RECORDINGS_ROOT, dir);
+        try {
+          const stat = fs.statSync(dirPath);
+          if (!stat.isDirectory()) continue;
+        } catch { continue; }
+
+        const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.mp4'));
+        for (const file of files) {
+          try {
+            const filePath = path.join(dirPath, file);
+            const fileStat = fs.statSync(filePath);
+            if (now - fileStat.mtimeMs > maxAgeMs) {
+              fs.unlinkSync(filePath);
+              deleted++;
+            }
+          } catch { /* ignore individual file errors */ }
+        }
+      }
+
+      if (deleted > 0) {
+        log('info', `[AutoRecord] Retention cleanup: deleted ${deleted} files older than ${AUTO_RECORD_RETENTION_DAYS} days`);
+      }
+    } catch (err) {
+      log('warn', `[AutoRecord] Retention cleanup error: ${err.message}`);
+    }
+  }, 60 * 60 * 1000); // every hour
+  if (typeof _retentionTimer.unref === 'function') _retentionTimer.unref();
+
+  log('info', `[AutoRecord] Continuous recording ENABLED — ${AUTO_RECORD_SEGMENT_SEC}s segments, ${AUTO_RECORD_RETENTION_DAYS} day retention → ${RECORDINGS_ROOT}`);
 }

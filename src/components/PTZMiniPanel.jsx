@@ -67,7 +67,14 @@ export default function PTZMiniPanel({ camera, onClose, style }) {
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] font-semibold text-white truncate max-w-[120px]">{camera.name}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-semibold text-white truncate max-w-[100px]">{camera.name}</span>
+          {camera.ptzType === 'closeli-motor' && (
+            <span className="text-[8px] font-mono px-1 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 whitespace-nowrap">
+              PTZ:MOTOR
+            </span>
+          )}
+        </div>
         <button onClick={handleClose} className="p-0.5 rounded text-slate-500 hover:text-white transition-colors">
           <X className="w-3 h-3" />
         </button>
