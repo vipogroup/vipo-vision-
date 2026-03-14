@@ -17,7 +17,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { log } from '../sanitize.js';
-import { getLiveTranscodeArgs } from '../gpuDetect.js';
+// getLiveTranscodeArgs no longer needed — live streams use copy mode
 
 const NAL_TYPE_SPS = 7;
 
@@ -218,7 +218,8 @@ const _mtxLiveCheckTimer = setInterval(async () => {
 }, 30_000);
 if (typeof _mtxLiveCheckTimer.unref === 'function') _mtxLiveCheckTimer.unref();
 
-export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hlsOutputDir, streamId, fps = 25 }) {
+export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hlsOutputDir, streamId, cameraId, fps = 25 }) {
+  const rtspId = cameraId || streamId; // Use cameraId for RTSP/recording paths
   const mainField3 = CHANNEL_TO_FIELD3[channel] ?? (channel * 3); // use lookup, fallback to channel*3
 
   const state = {
@@ -241,32 +242,25 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
 
   function startFfmpeg() {
     const outFps = Number(process.env.LIVE_OUT_FPS || 15);
-    const preset = process.env.LIVE_X264_PRESET || 'veryfast';
-    const crf = String(process.env.LIVE_CRF || '23');
-    const profile = process.env.LIVE_PROFILE || 'main';
-    const maxrate = process.env.LIVE_MAXRATE || '2500k';
-    const bufsize = process.env.LIVE_BUFSIZE || '5000k';
 
-    const enc = getLiveTranscodeArgs({ preset, crf, profile, maxrate, bufsize, forceCpu: nvencFailed });
-    log('info', `[${streamId}] STREAM ENCODER = ${enc.encoder === 'nvenc' ? 'NVENC' : 'CPU'} (live transcode)`);
+    // Use copy mode (no transcoding) for fastest possible startup.
+    // The raw H264 from the camera is already valid — re-encoding wastes time.
+    log('info', `[${streamId}] STREAM MODE = COPY (live, no transcode)`);
 
     const args = [
       '-y',
+      '-use_wallclock_as_timestamps', '1',
       '-fflags', '+genpts+discardcorrupt+nobuffer',
       '-flags', 'low_delay',
       '-err_detect', 'ignore_err',
-      // [LOW-LATENCY TUNING] Reduced probe/analyze for faster startup (was 2000000/2000000)
-      '-probesize', '500000',
-      '-analyzeduration', '500000',
+      '-probesize', '200000',
+      '-analyzeduration', '200000',
+      '-framerate', String(outFps),
       '-f', 'h264',
       '-i', 'pipe:0',
-      '-vf', `setpts=N/(${outFps}*TB)`,
-      ...enc.args,
-      '-pix_fmt', 'yuv420p',
-      '-r', String(outFps),
-      '-vsync', 'cfr',
+      '-c:v', 'copy',
+      '-bsf:v', 'dump_extra',
       '-an',
-      // [LOW-LATENCY TUNING] hls_time 1s, hls_list_size 3, omit_endlist keeps playlist live
       '-f', 'hls',
       '-hls_time', '1',
       '-hls_list_size', '3',
@@ -283,9 +277,9 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
         '-an',
         '-f', 'rtsp',
         '-rtsp_transport', 'tcp',
-        `${MEDIAMTX_RTSP_URL}/${streamId}`,
+        `${MEDIAMTX_RTSP_URL}/${rtspId}`,
       );
-      log('info', `[${streamId}] WebRTC: pushing live to ${MEDIAMTX_RTSP_URL}/${streamId}`);
+      log('info', `[${streamId}] WebRTC: pushing live to ${MEDIAMTX_RTSP_URL}/${rtspId}`);
     }
 
     // ─── Continuous recording to local disk ────────────────────────
@@ -293,9 +287,9 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     const autoRecSegSec = Number(process.env.AUTO_RECORD_SEGMENT_SEC || 900);
     if (autoRecEnabled) {
       const recRoot = path.resolve(process.env.RECORDINGS_PATH || 'recordings');
-      const recDir = path.join(recRoot, streamId);
+      const recDir = path.join(recRoot, rtspId);
       fs.mkdirSync(recDir, { recursive: true });
-      const recPattern = path.join(recDir, `${streamId}_%Y-%m-%d_%H-%M-%S.mp4`);
+      const recPattern = path.join(recDir, `${rtspId}_%Y-%m-%d_%H-%M-%S.mp4`);
       args.push(
         '-c:v', 'copy',
         '-an',
@@ -310,8 +304,15 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
       log('info', `[${streamId}] Auto-recording live: ${autoRecSegSec}s segments → ${recDir}`);
     }
 
-    log('info', `[${streamId}] Starting FFmpeg for channel ${channel} (transcode mode)`);
+    log('info', `[${streamId}] Starting FFmpeg for channel ${channel} (copy mode)`);
     const ffmpeg = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // Prevent unhandled 'error' events on stdin from crashing the server
+    ffmpeg.stdin.on('error', (err) => {
+      if (err.code !== 'EPIPE' && err.code !== 'EOF' && err.code !== 'ERR_STREAM_DESTROYED') {
+        log('warn', `[${streamId}] FFmpeg stdin error: ${err.code || err.message}`);
+      }
+    });
 
     let lastProgressLogAt = 0;
     ffmpeg.stderr.on('data', (data) => {
@@ -349,20 +350,6 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
     ffmpeg.on('close', (code) => {
       log('info', `[${streamId}] FFmpeg exited with code ${code}`);
       if (state.status !== 'stopped') {
-        // NVENC fallback: if NVENC was used and FFmpeg failed, retry with CPU
-        if (enc.encoder === 'nvenc' && code !== 0 && !nvencFailed) {
-          log('warn', `[${streamId}] NVENC encoding failed, falling back to CPU (libx264)...`);
-          nvencFailed = true;
-          // Reset SPS search state so FFmpeg can be restarted cleanly
-          foundSps = false;
-          spsBuffer = Buffer.alloc(0);
-          lastSpsNal = null;
-          lastPpsNal = null;
-          state.status = 'buffering';
-          state.error = null;
-          state.ffmpeg = null;
-          return;
-        }
         state.status = 'error';
         state.error = `FFmpeg exited with code ${code}`;
       }
@@ -415,11 +402,13 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
           foundSps = true;
           log('info', `[${streamId}] Found SPS/PPS/IDR for channel ${channel} (field3=${currentField3})`);
           state.ffmpeg = startFfmpeg();
-          if (state.ffmpeg && state.ffmpeg.stdin.writable) {
-            state.ffmpeg.stdin.write(lastSpsNal);
-            state.ffmpeg.stdin.write(lastPpsNal);
-            state.ffmpeg.stdin.write(spsBuffer.slice(start));
-          }
+          try {
+            if (state.ffmpeg && state.ffmpeg.stdin.writable) {
+              state.ffmpeg.stdin.write(lastSpsNal);
+              state.ffmpeg.stdin.write(lastPpsNal);
+              state.ffmpeg.stdin.write(spsBuffer.slice(start));
+            }
+          } catch (writeErr) { /* pipe may have closed */ }
           state.status = 'streaming';
           state.frameCount++;
           spsBuffer = Buffer.alloc(0);
@@ -433,8 +422,10 @@ export function startLiveStream({ cameraIp, streamPort = 12345, channel = 0, hls
 
     // Stream is running — pipe data to FFmpeg
     if (state.ffmpeg && state.ffmpeg.stdin.writable) {
-      state.ffmpeg.stdin.write(nalBuf);
-      state.frameCount++;
+      try {
+        state.ffmpeg.stdin.write(nalBuf);
+        state.frameCount++;
+      } catch (writeErr) { /* pipe may have closed */ }
     }
   };
 

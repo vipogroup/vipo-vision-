@@ -467,6 +467,7 @@ export const streamManager = {
       channel,
       hlsOutputDir: hlsDir,
       streamId: 'index',
+      cameraId,
       fps: 25,
     });
 
